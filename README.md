@@ -1,0 +1,523 @@
+# HawaGuide 🌿💨
+
+> **Hyperlocal Air Quality Intelligence & Park Environmental Vulnerability Index (PEVI) for Delhi NCR**
+
+HawaGuide is an advanced spatial air quality monitoring and modeling platform designed for Delhi National Capital Region (NCR). It ingests real-time and historical multi-pollutant measurements from regulatory monitoring networks (CPCB, DPCC, IMD, IITM, UPPCB, HSPCB) via the OpenAQ v3 API, persists geospatial observations in PostGIS, and uses geostatistical Ordinary Kriging to estimate continuous pollution exposure across urban parks and green spaces.
+
+---
+
+## 🏛️ Project Architecture
+
+```text
+HawaGuide/
+├── README.md                           # Project Documentation & Limitations
+├── .gitignore                          # Repository ignores (venv, .env, __pycache__)
+├── backend/
+│   ├── .env                            # PostgreSQL & API Credentials
+│   ├── .env.example                    # Environment variable template
+│   ├── requirements.txt                # Python dependencies
+│   ├── app/                            # FastAPI backend service (endpoints, PEVI APIs)
+│   │   └── __init__.py
+│   ├── data_pipeline/                  # Data ingestion & PostGIS management
+│   │   ├── __init__.py
+│   │   ├── schema.sql                  # PostGIS DDL schema & spatial indexes
+│   │   ├── setup_db.py                 # Automated schema & extension initializer
+│   │   ├── openaq_stations.py          # Active Delhi NCR station discovery & ingestion
+│   │   └── openaq_readings.py          # 90-day hourly multi-pollutant measurements sync
+│   └── ml/                             # Geostatistical & ML models
+│       ├── __init__.py
+│       └── kriging.py                  # Ordinary Kriging, LOOCV & 40-Park PEVI estimation
+├── docs/                               # Architecture notes & research papers
+└── frontend/                           # React / Mapbox UI application
+```
+
+---
+
+## 🔬 Core Geostatistical Modeling: Ordinary Kriging
+
+HawaGuide employs **Ordinary Kriging (OK)** using a spherical variogram model to interpolate continuous concentration fields for 6 key air pollutants:
+- **Particulate Matter**: $\text{PM}_{2.5}$, $\text{PM}_{10}$
+- **Gaseous Pollutants**: $\text{NO}_2$, $\text{SO}_2$, $\text{O}_3$, $\text{CO}$
+
+### Cross-Validation Methodology
+Model performance is evaluated via **Leave-One-Station-Out Cross-Validation (LOOCV)** across **100 randomly sampled hourly timestamps** spanning the 90-day historical archive ($\sim 1,400$ individual model fits):
+
+| Pollutant | Sample Runs | Avg Stations Reporting | Mean Actual Value | Mean LOOCV RMSE | RMSE Std. Dev ($\sigma$) | Mean LOOCV MAE | Relative Error |
+|---|---|---|---|---|---|---|---|
+| **PM2.5** | 100 | 13.1 | 44.78 $\mu\text{g/m}^3$ | **25.88 $\mu\text{g/m}^3$** | $\pm 35.91$ | 18.33 $\mu\text{g/m}^3$ | **54.7%** |
+| **PM10** | 100 | 13.1 | 133.17 $\mu\text{g/m}^3$ | **61.65 $\mu\text{g/m}^3$** | $\pm 39.91$ | 45.50 $\mu\text{g/m}^3$ | **49.0%** |
+| **NO₂** | 100 | 13.3 | 29.31 $\mu\text{g/m}^3$ | **22.12 $\mu\text{g/m}^3$** | $\pm 10.21$ | 17.02 $\mu\text{g/m}^3$ | **75.2%** |
+| **SO₂** | 100 | 7.5 | 18.62 $\mu\text{g/m}^3$ | **13.15 $\mu\text{g/m}^3$** | $\pm 6.74$ | 11.04 $\mu\text{g/m}^3$ | **69.0%** |
+| **O₃** | 100 | 13.1 | 27.96 $\mu\text{g/m}^3$ | **21.83 $\mu\text{g/m}^3$** | $\pm 15.57$ | 16.63 $\mu\text{g/m}^3$ | **79.1%** |
+| **CO** | 100 | 13.4 | 0.85 $\text{mg/m}^3$ | **0.56 $\text{mg/m}^3$** | $\pm 0.24$ | 0.42 $\text{mg/m}^3$ | **67.1%** |
+
+---
+
+## 🍃 Park Environmental Vulnerability Index (PEVI) Methodology
+
+The **Park Environmental Vulnerability Index (PEVI)** is a continuous, multipollutant exposure and health vulnerability metric calculated across all 40 urban green spaces in Delhi NCR. It quantifies the combined excess health risk from concurrent inhalation of 6 key air pollutants.
+
+### 1. Published Base Formulation: Canada AQHI (Stieb et al. 2008)
+The foundational risk-additive mathematical structure directly adopts the peer-reviewed **Air Quality Health Index (AQHI)** methodology established by Health Canada and Environment Canada:
+
+> **Citation**: Stieb, D. M., Burnett, R. T., Smith-Doiron, M., Brion, O., Shin, H. H., & Economou, V. (2008). *"A New Multipollutant, No-Threshold Air Quality Health Index Based on Short-Term Mortality Risk in Canadian Cities."* Journal of the Air & Waste Management Association, 58(3), 435–450. [DOI: 10.3155/1047-3289.58.3.435](https://doi.org/10.3155/1047-3289.58.3.435)
+
+The published 3-pollutant base formula is:
+$$\text{AQHI}_{\text{base}} = \left(\frac{10}{10.4}\right) \times 100 \times \left[ \left(e^{0.000537 \times \text{O}_3} - 1\right) + \left(e^{0.000871 \times \text{NO}_2} - 1\right) + \left(e^{0.000487 \times \text{PM}_{2.5}} - 1\right) \right]$$
+
+* **Input Units**: $\text{O}_3$ and $\text{NO}_2$ in $\text{ppb}$; $\text{PM}_{2.5}$ in $\mu\text{g/m}^3$.
+* **Unit Conversion**: Because HawaGuide's PostGIS database stores ambient gas concentrations in $\mu\text{g/m}^3$, standard **EPA atmospheric reference conversion factors** (at $25^\circ\text{C}$, $1\text{ atm}$, molar volume $V_m = 24.45\text{ L/mol}$) are applied prior to exponential risk calculation:
+  $$\text{O}_3\ (\text{ppb}) = \text{O}_3\ (\mu\text{g/m}^3) \times \frac{24.45}{47.998} \approx \text{O}_3 \times 0.50940$$
+  $$\text{NO}_2\ (\text{ppb}) = \text{NO}_2\ (\mu\text{g/m}^3) \times \frac{24.45}{46.005} \approx \text{NO}_2 \times 0.53146$$
+
+---
+
+### 2. HawaGuide Multipollutant Extension ($\text{PM}_{10}$, $\text{SO}_2$, $\text{CO}$)
+
+> [!NOTE]
+> **Attribution & Non-Peer-Reviewed Scope**: The risk terms for $\text{PM}_{10}$, $\text{SO}_2$, and $\text{CO}$ represent a **custom engineering extension developed specifically for HawaGuide**. They are **explicitly separate from the original published Canadian AQHI model** (Stieb et al. 2008), which was calibrated on a 3-pollutant mortality dataset.
+
+To account for Delhi NCR's severe coarse dust episodes ($\text{PM}_{10}$), industrial sulfur emissions ($\text{SO}_2$), and vehicular combustion ($\text{CO}$), equivalent exponential excess-risk terms are derived by scaling relative to the **WHO 2021 Air Quality Guideline** thresholds (stricter benchmark $\implies$ higher assumed biological risk coefficient):
+
+$$\beta_{\text{pollutant}} = \beta_{\text{PM}_{2.5}} \times \left( \frac{\text{Guideline}_{\text{PM}_{2.5}}}{\text{Guideline}_{\text{pollutant}}} \right)$$
+
+| Pollutant | Stored Unit | WHO Guideline Threshold | Guideline Ratio vs $\text{PM}_{2.5}$ | Derived Excess Risk Coefficient ($\beta$) | Source / Formulation |
+|---|---|---|---|---|---|
+| **$\text{O}_3$** | $\mu\text{g/m}^3 \to \text{ppb}$ | $100\ \mu\text{g/m}^3$ (8-hr) | — | $\mathbf{0.000537}\ \text{ppb}^{-1}$ | Published (Stieb et al. 2008) |
+| **$\text{NO}_2$** | $\mu\text{g/m}^3 \to \text{ppb}$ | $25\ \mu\text{g/m}^3$ (24-hr) | — | $\mathbf{0.000871}\ \text{ppb}^{-1}$ | Published (Stieb et al. 2008) |
+| **$\text{PM}_{2.5}$** | $\mu\text{g/m}^3$ | $15\ \mu\text{g/m}^3$ (24-hr) | $1.000$ | $\mathbf{0.000487}\ (\mu\text{g/m}^3)^{-1}$ | Published (Stieb et al. 2008) |
+| **$\text{PM}_{10}$** | $\mu\text{g/m}^3$ | $45\ \mu\text{g/m}^3$ (24-hr) | $15 / 45 = 0.333$ | $\mathbf{0.000162}\ (\mu\text{g/m}^3)^{-1}$ | HawaGuide Extension |
+| **$\text{SO}_2$** | $\mu\text{g/m}^3$ | $40\ \mu\text{g/m}^3$ (24-hr) | $15 / 40 = 0.375$ | $\mathbf{0.000183}\ (\mu\text{g/m}^3)^{-1}$ | HawaGuide Extension |
+| **$\text{CO}$** | $\text{mg/m}^3$ | $4.0\ \text{mg/m}^3$ (8-hr) | $(15 \times 0.000487) / 4.0$ | $\mathbf{0.001826}\ (\text{mg/m}^3)^{-1}$ | HawaGuide Extension |
+
+#### Complete PEVI Equation
+$$\text{PEVI} = \left(\frac{10}{10.4}\right) \times 100 \times \left[ \underbrace{\sum_{p \in \{\text{O}_3, \text{NO}_2, \text{PM}_{2.5}\}} \left(e^{\beta_p C_p} - 1\right)}_{\text{Published AQHI Base (Stieb et al. 2008)}} + \underbrace{\sum_{q \in \{\text{PM}_{10}, \text{SO}_2, \text{CO}\}} \left(e^{\beta_q C_q} - 1\right)}_{\text{HawaGuide Multi-Pollutant Extension}} \right]$$
+
+---
+
+### 3. CO Data Quality Audit & Unit Correction in Indian Regulatory Feeds
+
+During development of the PEVI pipeline, a rigorous unit and magnitude validation was conducted on the OpenAQ v3 data ingested from Indian monitoring stations (CPCB/DPCC):
+
+* **Observed Inconsistency**: OpenAQ v3 sensor metadata lists active CPCB CO sensors under `units="ppb"` (e.g., sensor `12234748` at ITO).
+* **Magnitude Sanity Check**: Ingested CO numerical values range between **$0.10$ and $6.0\ \text{mg/m}^3$** (with peak localized spikes up to $43.0$). If these numbers were truly in $\text{ppb}$, ambient CO across Delhi would equal $0.0001 - 0.006\ \text{ppm}$ — an impossibly clean reading that violates atmospheric chemistry baselines. In $\text{mg/m}^3$, these values align precisely with Delhi's known ambient concentration range ($0.5 - 3.0\ \text{mg/m}^3$) and the WHO 8-hour benchmark ($4.0\ \text{mg/m}^3$).
+* **Literature Context**: This reflects a documented unit-labeling inconsistency in Indian CPCB data transmitted via OpenAQ, where mass concentrations in $\text{mg/m}^3$ are periodically ingested under volumetric $\text{ppb}$ parameter tags (see *Vohra et al., Science of The Total Environment*, ScienceDirect, on data quality and unit reporting anomalies across Indian air quality networks).
+* **Implementation Fix**: HawaGuide explicitly treats and processes all CO readings as $\mathbf{\text{mg/m}^3}$, utilizing the WHO-calibrated coefficient $\beta_{\text{CO}} = 0.001826\ (\text{mg/m}^3)^{-1}$.
+
+---
+
+### 4. Hotspot Proximity Correlation: Validating Kriging Smoothing
+
+To verify whether proximity to localized high-emission monitors artificially skews park vulnerability scores, great-circle distances were computed from each of the 40 parks to Delhi's two primary industrial/transit hotspots: **Anand Vihar** (DPCC) and **Punjabi Bagh** (DPCC):
+
+* **Statistical Correlations (40 Urban Parks)**:
+  * **Distance to Nearest Hotspot vs. PEVI**: Pearson $r = \mathbf{-0.2844}$ (Weak inverse correlation), Spearman $\rho = -0.2668$
+  * **Distance to Anand Vihar vs. PEVI**: Pearson $r = \mathbf{-0.1004}$ (Virtually uncorrelated)
+  * **Distance to Punjabi Bagh vs. PEVI**: Pearson $r = -0.7946$ (Reflects West/North-West regional gradient)
+
+* **Physical & Geostatistical Interpretation**:
+  * Cleanest, lowest-vulnerability parks in the East/South-East periphery (e.g. *Smriti Van* at $\text{PEVI} = 3.38$, *Meghdootam Park* at $\text{PEVI} = 3.45$) are located within **$7.9 - 8.2\text{ km}$** of Anand Vihar, yet exhibit lower vulnerability than central parks $12+\text{ km}$ away.
+  * **Validation**: This confirms that hotspot proximity does **not** create steep, unphysical distance-decay spikes in PEVI. Instead, it empirically validates Ordinary Kriging's intended **spatial smoothing mechanism** (regression to regional background mean across the convex hull), proving this behavior is an understood mathematical property rather than an algorithmic bug.
+
+---
+
+### 5. PEVI-Adjusted Relative Vulnerability Bands (Base vs. Personalized Scales)
+
+> [!WARNING]
+> **Scale Differentiation**: **Base PEVI** and **Personalized PEVI** operate on fundamentally different numerical scales and **must NOT use the same risk band cutoffs**:
+> * **Base PEVI** represents ambient multi-pollutant vulnerability at the park location (unscaled baseline range: $\mathbf{3.12 - 7.07}$).
+> * **Personalized PEVI** incorporates demographic susceptibility, cardiopulmonary multipliers, and cumulative duration scaling ($1.075\times - 3.12\times$), expanding the score range to $\mathbf{3.59 - 18.0+}$.
+
+#### A. Base PEVI Quartile Bands (Ambient Green Space Risk)
+Derived from the unweighted 40-park baseline distribution:
+
+| Relative Vulnerability Band | Base PEVI Range (Quartiles) | Number of Parks | Illustrative Parks in Delhi NCR |
+|---|---|---|---|
+| **Band 1: Low Relative Vulnerability** | $\text{Base PEVI} \le \mathbf{4.13}$ ($Q_1$) | 10 | Mansarovar Park ($3.12$), Okhla Bird Sanctuary ($3.26$), Smriti Van ($3.38$), Noida Biodiversity Park ($3.53$) |
+| **Band 2: Moderate Relative Vulnerability** | $4.13 < \text{Base PEVI} \le \mathbf{4.81}$ ($Q_2$) | 10 | Leisure Valley Park ($4.15$), Town Park Faridabad ($4.18$), City Forest Ghaziabad ($4.31$), Sanjay Van ($4.74$) |
+| **Band 3: High Relative Vulnerability** | $4.81 < \text{Base PEVI} \le \mathbf{5.65}$ ($Q_3$) | 10 | Jahanpanah City Forest ($4.79$), Deer Park ($5.13$), Sunder Nursery ($5.14$), Lodhi Garden ($5.60$) |
+| **Band 4: Highest Relative Vulnerability** | $\text{Base PEVI} > \mathbf{5.65}$ ($Q_4$) | 10 | Nehru Park ($5.70$), Central Park ($6.16$), Amrit Udyan ($6.23$), Talkatora Gardens ($6.43$), Roshanara Bagh ($7.07$) |
+
+#### B. Personalized PEVI Relative Risk Bands (Individual Inhaled Burden)
+Derived from the empirical pooled distribution across representative demographic personas ($N=160$ across 4 sensitivity tiers):
+
+| Personalized Risk Band | Personalized PEVI Range | Consumer Advisory Guidance (AirLief / AirVisual Style) |
+|---|---|---|
+| **Band 1: Low Risk** | $\text{Pers PEVI} \le \mathbf{6.00}$ ($Q_1$) | Great conditions for outdoor activities and exercise. |
+| **Band 2: Moderate Risk** | $6.00 < \text{Pers PEVI} \le \mathbf{7.70}$ ($Q_2$) | Acceptable for most outdoor activities; sensitive groups may want to consider shorter outdoor sessions. |
+| **Band 3: High Risk** | $7.70 < \text{Pers PEVI} \le \mathbf{10.30}$ ($Q_3$) | Higher air pollution exposure; sensitive groups may want to reduce strenuous outdoor activity or consider mask protection. |
+| **Band 4: Extreme Risk** | $\text{Pers PEVI} > \mathbf{10.30}$ ($Q_4$) | Significantly elevated exposure; consider indoor activities or choosing a lower-risk nearby location. |
+
+> [!CAUTION]
+> **Health Disclaimer**: This tool provides general environmental air quality guidance, not medical advice; consult a healthcare provider for personal health decisions.
+
+---
+
+### 6. Seasonal Meteorological Context (Monsoon vs. Winter Smog)
+
+> [!IMPORTANT]
+> **Pre-Monsoon / Monsoon Dataset Scope**: The underlying 90-day archive spans **June through September**.
+> * During this season, continuous monsoon rainfall, convective atmospheric mixing, and active wet deposition wash out particulate matter, yielding Delhi's annual minimum background concentrations (mean $\text{PM}_{2.5} \sim 44.8\ \mu\text{g/m}^3$, mean $\text{PM}_{10} \sim 133.2\ \mu\text{g/m}^3$).
+> * The resulting "mostly Moderate" PEVI scores ($3.1 - 7.1$) accurately reflect this **cleaner monsoon baseline** and must **not** be misinterpreted as underestimating Delhi's chronic winter pollution crisis.
+> * During Delhi's severe winter smog period (**October through January**), characterized by nocturnal thermal inversions, calm winds, and stubble burning plumes, $\text{PM}_{2.5}$ regularly surges $5\times - 10\times$ higher ($300 - 500+\ \mu\text{g/m}^3$), which will scale PEVI scores well into extreme advisory brackets ($10+$ to $20+$).
+
+---
+
+## ⚠️ Known Limitations & Design Tradeoffs
+
+> [!IMPORTANT]
+> The spatial smoothing behavior of Ordinary Kriging is an **intentional, mathematically intrinsic tradeoff** of Gaussian random field regression, rather than an unexplained algorithmic flaw.
+
+### 1. Linear Weighted-Average Constraint (Regression to the Mean)
+Ordinary Kriging calculates unmonitored location values as a best linear unbiased estimator:
+$$\hat{Z}(x_0) = \sum_{i=1}^n \lambda_i Z(x_i), \quad \text{subject to } \sum_{i=1}^n \lambda_i = 1$$
+
+Because all weights sum to $1$ and negative weights are mathematically bounded, Kriging operates as a **convex hull spatial smoothing operator**. It **cannot extrapolate or predict values more extreme** than its surrounding observation points.
+
+### 2. Systematic Underestimation at Localized Emission Hotspots
+In metropolitan Delhi NCR, air pollution is heavily influenced by micro-scale sources (congested transit hubs, industrial clusters, unpaved corridors, waste burning). When a localized high-emission monitor (such as Anand Vihar or Punjabi Bagh) is surrounded by lower-concentration residential or background monitors:
+- **Kriging regresses the hotspot prediction toward the regional background mean.**
+- **Empirical Hotspot LOOCV Results**:
+  - **Underestimation Frequency**: Peak pollution at hotspot stations is underestimated in **69.8% to 70.6%** of hourly timestamps.
+  - **PM2.5 Hotspots (Anand Vihar, NSIT Dwarka, Sirifort)**: Average underestimation deficit of **$+15.33\ \mu\text{g/m}^3$** below ground truth during spikes.
+  - **PM10 Hotspots (Anand Vihar, Sector-125 Noida, Punjabi Bagh)**: Average underestimation deficit of **$+56.09\ \mu\text{g/m}^3$** (a **17.4%** systemic deficit relative to actual ground measurements).
+
+### 3. Why this Tradeoff is Chosen for HawaGuide
+For regional park exposure estimation and Park Environmental Vulnerability Index (PEVI) calculation, this spatial smoothing is desirable:
+- It eliminates spurious numerical instability and runaway artifacts between sparse monitors.
+- It produces stable, continuous background concentration baselines across park polygons without over-attributing localized road-edge anomalies to expansive green spaces.
+
+### 4. 24-Hour Rolling Mean for Park-Level Estimates
+Park-level pollutant estimates (stored in `interpolated_locations`) are computed from each station's **24-hour rolling mean**, not the instantaneous latest reading.
+
+**Why:** With only 14 monitoring stations across Delhi NCR, a single hourly snapshot provides too few lag pairs for pykrige to reliably fit three variogram parameters (nugget, sill, range). The auto-fitting optimizer frequently converges to a degenerate **pure-nugget solution** — placing ~100% of variance into noise and zero into spatial signal — which collapses every park's Kriging estimate to the identical station-network mean, erasing all spatial variation.
+
+Averaging across the most recent 24 hours smooths transient single-sensor spikes, gives the variogram estimator a richer and more representative spatial covariance structure, and consistently produces non-degenerate fits with genuine spatial gradients across all six pollutants.
+
+**Tradeoff:** This means the park estimates reflect a ~24-hour lagged picture of air quality rather than the past hour. For the PEVI use case — characterising a park's *typical* pollution exposure for route recommendations — this temporal smoothing is appropriate. For real-time alert thresholds, a separate single-snapshot index (outside PEVI) would be needed.
+
+---
+
+## 🌲 40 Configured Delhi NCR Parks & Green Spaces
+
+Air quality estimates are computed for 40 real, named urban green spaces and stored in the PostGIS `interpolated_locations` table:
+1. **Lodhi Garden** (Central Delhi)
+2. **Sunder Nursery** (Nizamuddin / South East)
+3. **Nehru Park** (Chanakyapuri)
+4. **Deer Park** (Hauz Khas)
+5. **District Park Hauz Khas** (Hauz Khas)
+6. **Sanjay Van** (Qutub Institutional Area)
+7. **Garden of Five Senses** (Said-ul-Ajaib / Saket)
+8. **Buddha Jayanti Park** (Central Ridge)
+9. **Central Park** (Connaught Place)
+10. **India Gate Lawns** (Central Delhi)
+11. **Amrit Udyan (Mughal Gardens)** (Rashtrapati Bhavan)
+12. **Millennium Indraprastha Park** (Sarai Kale Khan)
+13. **Japanese Park (Swarna Jayanti)** (Rohini Sector 10)
+14. **Rohini District Park** (Rohini Sector 9)
+15. **Yamuna Biodiversity Park** (Wazirabad)
+16. **Aravalli Biodiversity Park** (Vasant Kunj)
+17. **Aravalli Biodiversity Park** (Gurugram)
+18. **Leisure Valley Park** (Sector 29, Gurugram)
+19. **Tau Devi Lal Biodiversity Park** (Sector 52, Gurugram)
+20. **Biodiversity Park Okhla** (Kalindi Kunj)
+21. **Okhla Bird Sanctuary** (Noida / Delhi Border)
+22. **Meghdootam Park** (Sector 50, Noida)
+23. **Noida Biodiversity Park** (Sector 91, Noida)
+24. **Mansarovar Park** (Sector 38A, Noida)
+25. **Smriti Van** (Sector 49, Noida)
+26. **Asola Bhatti Wildlife Sanctuary** (Tughlakabad)
+27. **Qudsia Bagh** (Civil Lines)
+28. **Roshanara Bagh** (Shakti Nagar)
+29. **Shalimar Bagh District Park** (North Delhi)
+30. **Talkatora Gardens** (President's Estate)
+31. **Mahavir Jayanti Park** (Ridge Road)
+32. **National Rose Garden** (Chanakyapuri)
+33. **Jahanpanah City Forest** (Alaknanda / Greater Kailash)
+34. **Sanjay Lake Park** (Mayur Vihar)
+35. **Swarna Jayanti Park Indirapuram** (Ghaziabad)
+36. **City Forest Ghaziabad** (Raj Nagar Extension)
+37. **Town Park Faridabad** (Sector 12, Faridabad)
+38. **Badkhal Lake Eco Park** (Faridabad)
+39. **Surajkund Green Complex** (Faridabad / Delhi Border)
+40. **Coronation Park** (Burari Road / Kingsway Camp)
+
+---
+
+## 🚀 Quickstart & Execution
+
+### 1. Database Setup
+Ensure PostgreSQL 18 with PostGIS 3.6 is running, configure `backend/.env`, and execute:
+```powershell
+.\venv\Scripts\python.exe backend/data_pipeline/setup_db.py
+```
+
+### 2. Discover Active Stations & Ingest OpenAQ Readings
+```powershell
+# Discover and register 14 active monitoring stations
+.\venv\Scripts\python.exe backend/data_pipeline/openaq_stations.py
+
+# Ingest 90 days of hourly multi-pollutant readings (~144,000 rows)
+.\venv\Scripts\python.exe backend/data_pipeline/openaq_readings.py
+```
+
+### 3. Run Kriging Validation & 40-Park Interpolation
+```powershell
+.\venv\Scripts\python.exe backend/ml/kriging.py
+```
+
+### 4. Compute PEVI Scores & Rank 40 Parks
+```powershell
+.\venv\Scripts\python.exe backend/ml/pevi.py
+```
+
+### 5. Train & Evaluate 6-Hour Ahead PM2.5 Models & Ensembles
+```powershell
+# Train & evaluate XGBoost v3 with change-target and weather features
+.\venv\Scripts\python.exe backend/ml/forecast_xgboost.py
+
+# Train & evaluate LSTM (1-layer, H=32, 12h sequence lookback)
+.\venv\Scripts\python.exe backend/ml/forecast_lstm.py
+```
+
+### 6. Run Personalized Park Optimizer & Launch FastAPI Backend
+```powershell
+# Run the standalone location optimizer CLI test
+.\venv\Scripts\python.exe backend/ml/optimizer.py
+
+# Launch the FastAPI REST service on http://localhost:8000
+.\venv\Scripts\uvicorn.exe backend.app.main:app --reload --port 8000
+```
+
+---
+
+## 🎯 Personalized PEVI & Multi-Objective Spatial Park Optimizer
+
+### 1. Personalized PEVI Formulation
+To translate static ambient risk into actionable personalized guidance, the base Park Environmental Vulnerability Index is adjusted for demographic vulnerability, pre-existing health status, and cumulative exposure duration:
+
+$$\text{Personalized\_PEVI} = \text{Base\_PEVI} \times \text{age\_multiplier} \times \text{condition\_multiplier} \times \left(1 + 0.15 \times \text{duration\_hours}\right)$$
+
+#### Multiplier Specifications:
+* **`age_multiplier`**:
+  * **$1.3$** for **children** ($<18$, higher ventilation-to-body-mass ratio and developing airways) or **elderly** ($65+$, diminished cardiovascular elasticity).
+  * **$1.0$** for **adults** (general baseline).
+* **`condition_multiplier`**:
+  * **$1.5$** for underlying **respiratory** (asthma, COPD) or **cardiac** conditions.
+  * **$1.0$** for **healthy** individuals.
+* **`duration_multiplier`**:
+  * $\left(1 + 0.15 \times \text{duration\_hours}\right)$ accounts for cumulative inhaled dose and sustained physical activity in polluted air.
+
+> [!NOTE]
+> **Epidemiological Attribution & Literature Basis**:
+> These multipliers are informed by:
+> 1. US EPA *"Particle Pollution Exposure"* clinical references on sensitive subpopulations.
+> 2. Time-series epidemiological studies on ambient air pollution and vulnerable group hospitalizations (e.g., a Southwest China multi-city time-series study on air pollution and elderly asthma hospitalization, *PMC10859495*).
+> 
+> *Disclaimer*: While grounded in EPA sensitive-group categorizations and published relative-risk ranges, these specific constants ($1.3, 1.5, 0.15/\text{hr}$) represent HawaGuide's own engineering and risk-weighting framework for comparative green space ranking, not directly published universal constants.
+
+---
+
+### 2. Multi-Objective Spatial Location Optimizer
+
+For any user starting coordinate $(\text{lat}, \text{lon})$, the optimizer balances **environmental pollution risk** against **travel distance**:
+
+1. **Geodetic Proximity via PostGIS**:
+   Computes exact geodesic distances (in meters / km) from user coordinates to all 40 parks using PostGIS `ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography)`.
+2. **Min-Max Feature Normalization**:
+   Normalizes both $\text{Personalized\_PEVI}$ and $\text{distance\_km}$ across all 40 candidate parks to a $[0, 1]$ scale:
+   $$\text{norm\_risk} = \frac{\text{risk} - \min(\text{risk})}{\max(\text{risk}) - \min(\text{risk})}, \quad \text{norm\_distance} = \frac{\text{dist} - \min(\text{dist})}{\max(\text{dist}) - \min(\text{dist})}$$
+3. **Composite Trade-Off Scoring**:
+   $$\text{Score} = \alpha \times \text{norm\_risk} + (1 - \alpha) \times \text{norm\_distance} \quad (\text{lower is better})$$
+   * $\alpha = 1.0 \rightarrow$ Purely lowest pollution risk.
+   * $\alpha = 0.0 \rightarrow$ Purely closest geographic proximity.
+   * $\alpha = 0.5 \rightarrow$ Balanced health-travel trade-off.
+
+---
+
+### 3. FastAPI REST Endpoint: `GET /optimize`
+
+#### Query Parameters:
+* `lat` (*float*, required): Starting latitude (e.g. `28.6328`)
+* `lon` (*float*, required): Starting longitude (e.g. `77.2197`)
+* `age_group` (*str*, optional, default `"adult"`): `'adult'`, `'child'`, `'elderly'`
+* `condition` (*str*, optional, default `"healthy"`): `'healthy'`, `'respiratory'`, `'cardiac'`
+* `duration_hours` (*float*, optional, default `1.0`): Planned visit duration in hours
+* `alpha` (*float*, optional, default `0.5`): Multi-objective weight $[0.0, 1.0]$
+
+#### Example Request:
+```http
+GET /optimize?lat=28.6328&lon=77.2197&age_group=elderly&condition=respiratory&duration_hours=2.0&alpha=0.7
+```
+
+#### Example JSON Response:
+```json
+{
+  "status": "success",
+  "disclaimer": "This tool provides general environmental air quality guidance, not medical advice; consult a healthcare provider for personal health decisions.",
+  "query": {
+    "start_lat": 28.6328,
+    "start_lon": 77.2197,
+    "age_group": "elderly",
+    "age_multiplier": 1.3,
+    "condition": "respiratory",
+    "condition_multiplier": 1.5,
+    "duration_hours": 2.0,
+    "duration_multiplier": 1.3,
+    "alpha": 0.7,
+    "total_multiplier": 2.535
+  },
+  "total_parks": 40,
+  "recommendations": [
+    {
+      "rank": 1,
+      "id": 24,
+      "name": "Mansarovar Park",
+      "zone": "Sector 38A, Noida",
+      "lat": 28.5524,
+      "lon": 77.3385,
+      "distance_km": 14.644,
+      "distance_meters": 14643.9,
+      "base_pevi": 3.12,
+      "personalized_pevi": 7.9092,
+      "personalized_risk_band": "High (Band 3)",
+      "advisory_guidance": "Higher air pollution exposure; sensitive groups may want to reduce strenuous outdoor activity or consider mask protection.",
+      "norm_risk": 0.0,
+      "norm_distance": 0.526296,
+      "score": 0.157889
+    }
+  ]
+}
+```
+
+---
+
+## 🤖 LangGraph Agent Layer + Google Gemini Integration
+
+The intelligent agent layer integrates geostatistical interpolation, ML forecasting, personalized risk modeling, and LLM reasoning into a cyclical **LangGraph StateGraph** workflow:
+
+```mermaid
+graph TD
+    A[Start: User Profile & Location] --> B[fetch_current: Query Current PEVI & Pollutant Breakdown]
+    B --> C[fetch_forecast: Generate 6h PM2.5 Ensemble Trajectory]
+    C --> D[personalize: Apply Inhalation Multipliers & Rank 40 Parks]
+    D --> E[reason: Google Gemini Synthesizes Optimal Window & Green Space]
+    E --> F[explain: Format Plain-Language Advisory Recommendation]
+    F --> G[End: Structured Recommendation & State Trace]
+```
+
+### 1. Extended Personalization Multipliers
+* **`smoker_multiplier` ($1.25\times$)**: Accounts for compromised mucociliary clearance and chronic baseline airway inflammation (EPA sensitive-subpopulation references).
+* **`activity_multiplier`**:
+  * **Rest / Sedentary ($1.0\times$)**: Basal minute-ventilation $\dot{V}_E \approx 6 - 8\text{ L/min}$.
+  * **Moderate Exercise ($1.3\times$)**: Brisk walking, light cycling ($\dot{V}_E \approx 20 - 30\text{ L/min}$).
+  * **Vigorous Exercise ($1.6\times$)**: Running, high-intensity cardio ($\dot{V}_E \approx 45 - 65+\text{ L/min}$), shifting to oral inhalation which bypasses nasal filtration. *(Cited: US EPA Exposure Factors Handbook, Chapter 6: Inhalation Rates)*.
+
+---
+
+### 2. FastAPI Endpoint: `POST /agent/recommend`
+
+#### Request Schema:
+```json
+{
+  "lat": 28.6328,
+  "lon": 77.2197,
+  "age_group": "elderly",
+  "conditions": ["asthma"],
+  "smoker": false,
+  "planned_activity": "moderate",
+  "duration_hours": 2.0,
+  "alpha": 0.6
+}
+```
+
+#### Response Structure:
+Returns the final plain-language recommendation text, the optimal time window in the next 6 hours, top recommended park, compound multiplier breakdown, complete 5-node state trace (with input/output snapshots at each node for auditability), and the standard medical disclaimer.
+
+---
+
+### 3. FastAPI Endpoint: `POST /agent/ask` (Conversational, Session-Aware)
+
+A natural-language conversational interface built on top of the same LangGraph workflow. Accepts free-text messages and maintains per-session slot memory across turns — so users do not need to fill a structured JSON form.
+
+#### How it works
+
+```text
+Turn N  →  load partial state for session_id
+        →  Gemini structured-output call: extract {age_group, conditions, smoker,
+                                             planned_activity, duration_hours, location}
+        →  Nominatim geocoding: location name → (lat, lon)
+        →  merge into session state
+        →  still missing fields? → return clarifying question  (status: "clarifying")
+        →  all fields present?  → run full LangGraph agent    (status: "complete")
+```
+
+#### Request Schema:
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Is it safe to go outside right now? I'm elderly with asthma.",
+  "alpha": 0.6
+}
+```
+*`session_id` is a client-generated UUID. Reuse the same ID across turns within a conversation.*
+
+#### Response Schema:
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "clarifying",
+  "message": "To give you a personalised recommendation, I still need a few details: location, whether you smoke (yes / no), planned activity level (rest / moderate / vigorous), and how long you plan to be outside (e.g. 1 hour, 1.5 hours).",
+  "missing_fields": ["location", "whether you smoke (yes / no)", "planned activity level (rest / moderate / vigorous)", "how long you plan to be outside (e.g. 1 hour, 1.5 hours)"],
+  "extraction_degraded": false,
+  "recommendation": null,
+  "disclaimer": "This tool provides general environmental air quality guidance, not medical advice; consult a healthcare provider for personal health decisions."
+}
+```
+
+**`extraction_degraded`**: `true` when the Gemini field-extraction call failed (quota, outage). In that case the question is prefixed honestly: *"I'm having trouble understanding free-text right now, so please share each detail separately: ..."*
+
+Session state is cleared after a successful recommendation, so the next message with the same `session_id` starts a fresh conversation naturally.
+
+---
+
+### 4. API Key & Quota: Same Key, Shared Pool
+
+> [!IMPORTANT]
+> **Both `/agent/recommend` (Gemini reasoning node) and `/agent/ask` (Gemini field-extraction) load the same `GEMINI_API_KEY` from `backend/.env`.**
+>
+> - `main.py` resolves `Path(__file__).resolve().parent.parent / ".env"` → `backend/.env`
+> - `agent_graph.py` tries `PROJECT_ROOT / "backend" / ".env"` first → `backend/.env`
+>
+> Both paths resolve to the same file. All Gemini calls from a running uvicorn process draw from the **same daily quota**.
+
+> [!CAUTION]
+> **Free-tier quota**: The Gemini free tier allows **20 requests per day per model** (`gemini-3.6-flash`).
+> Each full conversational turn via `/agent/ask` uses **2 quota slots** — 1 for field extraction + 1 for the reasoning node.
+> That means the free tier supports approximately **10 full conversational recommendations per day** under normal use.
+> For sustained production use or load testing, upgrade to a paid Gemini API plan (Pay-as-you-go or Vertex AI) to remove the daily cap.
+
+---
+
+## ⚠️ Known Limitations & Design Tradeoffs
+
+1. **Free-Text LLM Extraction & Daily Quota Limits**:
+   - Free-text extraction in `POST /agent/ask` uses live Google Gemini calls with structured schema constraints rather than brittle regex or keyword heuristics.
+   - On the Google AI Studio free tier, API usage is bounded by a **20 request/day** per-model quota (`gemini-2.5-flash` / `gemini-3.6-flash`).
+   - **Graceful Degradation**: If the Gemini API call fails (quota exhausted, network timeout, or upstream outage), the agent marks `extraction_degraded: true` and falls back cleanly to asking structured clarification questions, explicitly informing the user rather than guessing or silently failing.
+
+2. **Live Nominatim Geocoding & Rate Limits**:
+   - Location resolution uses live OpenStreetMap Nominatim geocoding (`nominatim.openstreetmap.org/search`) with proper `User-Agent` headers rather than hardcoded location lookup dictionaries.
+   - Nominatim enforces an operational rate limit of **1 request/second**. Rapid concurrent requests or automated test suites must respect this limit or implement caching to avoid HTTP 429 throttling.
+
+3. **Spatial Sensor Density & Kriging Smoothing**:
+   - Delhi NCR ambient pollution surfaces are interpolated from 14 active, high-fidelity OpenAQ/CPCB reference stations.
+   - While Ordinary Kriging provides statistically optimal linear unbiased estimation across regional park polygons, hyper-local microclimates (such as roadside vehicle emissions, micro-topography, or temporary point-source biomass burning) cannot be fully resolved at sub-kilometer resolution without dense low-cost sensor meshes.
+
+4. **Seasonal Training Distribution**:
+   - Historical sensor baselines and ML forecasters were trained on monsoon/post-monsoon meteorological conditions ($\text{PM}_{2.5} \sim 40 - 100\ \mu\text{g/m}^3$).
+   - Delhi's severe winter inversion events ($\text{PM}_{2.5} > 300 - 600\ \mu\text{g/m}^3$) represent distinct atmospheric regimes. Ongoing model recalibration is recommended as winter ground data ingests.
+
+5. **Personalized PEVI Multipliers & Medical Disclaimer**:
+   - Inhalation volume scaling (e.g., $1.3\times$ moderate, $1.6\times$ vigorous) and demographic vulnerability factors are grounded in US EPA Exposure Factors Handbook and published epidemiologic relative risks.
+   - These scores provide environmental risk prioritization, not deterministic medical diagnostics or clinical guidance.

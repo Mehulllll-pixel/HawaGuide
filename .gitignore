@@ -1,0 +1,35 @@
+# Environments and virtualenvs
+venv/
+env/
+ENV/
+.venv/
+
+# Environment Variables
+.env
+*.env
+!.env.example
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pytest_cache/
+
+# Node & Frontend dependencies
+node_modules/
+dist/
+build/
+
+# Binaries and archives
+*.zip
+*.exe
+*.dll
+*.iso
+*.tar
+*.tar.gz
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
