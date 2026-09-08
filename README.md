@@ -6,7 +6,7 @@ HawaGuide is an advanced spatial air quality monitoring and modeling platform de
 
 ---
 
-## 🏛️ Project Architecture
+##  Project Architecture
 
 ```text
 HawaGuide/
@@ -33,7 +33,7 @@ HawaGuide/
 
 ---
 
-## 🔬 Core Geostatistical Modeling: Ordinary Kriging
+##  Core Geostatistical Modeling: Ordinary Kriging
 
 HawaGuide employs **Ordinary Kriging (OK)** using a spherical variogram model to interpolate continuous concentration fields for 6 key air pollutants:
 - **Particulate Matter**: $\text{PM}_{2.5}$, $\text{PM}_{10}$
@@ -244,7 +244,7 @@ Air quality estimates are computed for 40 real, named urban green spaces and sto
 
 ---
 
-## 🚀 Quickstart & Execution
+##  Quickstart & Execution
 
 ### 1. Database Setup
 Ensure PostgreSQL 18 with PostGIS 3.6 is running, configure `backend/.env`, and execute:
@@ -291,7 +291,7 @@ Ensure PostgreSQL 18 with PostGIS 3.6 is running, configure `backend/.env`, and 
 
 ---
 
-## 🎯 Personalized PEVI & Multi-Objective Spatial Park Optimizer
+##  Personalized PEVI & Multi-Objective Spatial Park Optimizer
 
 ### 1. Personalized PEVI Formulation
 To translate static ambient risk into actionable personalized guidance, the base Park Environmental Vulnerability Index is adjusted for demographic vulnerability, pre-existing health status, and cumulative exposure duration:
@@ -392,7 +392,7 @@ GET /optimize?lat=28.6328&lon=77.2197&age_group=elderly&condition=respiratory&du
 
 ---
 
-## 🤖 LangGraph Agent Layer + Google Gemini Integration
+##  LangGraph Agent Layer + Google Gemini Integration
 
 The intelligent agent layer integrates geostatistical interpolation, ML forecasting, personalized risk modeling, and LLM reasoning into a cyclical **LangGraph StateGraph** workflow:
 
