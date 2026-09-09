@@ -517,9 +517,10 @@ def analyze_hotspot_proximity_correlation(conn, df_results: pd.DataFrame):
     print("Physical & Geostatistical Interpretation:")
     print("  1. Lowest-vulnerability parks in East/South-East (e.g. Smriti Van, Meghdootam) are within 8 km of Anand Vihar,")
     print("     yet score among the lowest PEVI (3.38 - 3.45) due to spatial smoothing and regional background averaging.")
-    print("  2. This confirms that hotspot proximity does NOT create artificially steep distance-decay spikes in PEVI.")
-    print("  3. This validates that PEVI reflects Ordinary Kriging's documented spatial smoothing limitation (regression")
-    print("     to the regional mean / convex hull bounding) rather than a bug in index formulation.")
+    print("  2. Distance to Punjabi Bagh acts as a proxy for Delhi's macro Northwest-to-Southeast regional pollution gradient,")
+    print("     whereas distance to Anand Vihar shows near-zero correlation due to adjacent cleaner green spaces in Noida.")
+    print("  3. This is consistent with Ordinary Kriging's known spatial smoothing behavior (regression to the regional mean),")
+    print("     though correlation alone does not prove causation — it serves as supporting empirical evidence.")
     print("=" * 115 + "\n")
 
 

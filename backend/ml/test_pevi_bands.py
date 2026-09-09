@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import pytest
+import unittest
 from fastapi.testclient import TestClient
 from backend.ml.optimizer import get_base_pevi_band, get_personalized_risk_band
 from backend.app.main import app
