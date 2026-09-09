@@ -1,0 +1,20 @@
+/* HawaGuide Base CSS Variables & Design Tokens */
+:root {
+  --color-bg: #0b0f19;
+  --color-surface: #111827;
+  --color-surface-elevated: #1f2937;
+  --color-border: rgba(255, 255, 255, 0.08);
+  
+  --color-primary: #10b981;
+  --color-primary-light: #34d399;
+  --color-accent: #38bdf8;
+  
+  --color-text-primary: #f9fafb;
+  --color-text-secondary: #9ca3af;
+  --color-text-muted: #6b7280;
+
+  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+}

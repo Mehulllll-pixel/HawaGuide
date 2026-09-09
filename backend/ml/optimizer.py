@@ -5,7 +5,7 @@ HawaGuide — Personalized PEVI & Multi-Objective Spatial Park Location Optimize
 
 Module Overview:
 ----------------
-This module implements the personalized Park Environmental Vulnerability Index (PEVI) calculation
+This module implements the Personalized Exposure Vulnerability Index (PEVI) calculation
 and multi-objective spatial location optimizer for urban green spaces across Delhi NCR.
 
 1. Personalized PEVI Formulation:
@@ -263,7 +263,15 @@ def get_personalized_guidance(pers_pevi: float) -> str:
 
 def get_personalized_risk_band(pers_pevi: float) -> str:
     """
-    Returns the relative vulnerability band for a Personalized PEVI score.
+    Returns the relative vulnerability band for a **Personalized PEVI** score.
+    Uses Personalized PEVI scale thresholds (empirical pooled distribution across
+    representative demographic personas, N=160 across 4 sensitivity tiers):
+        Band 1 Low:      pers_pevi <= 6.00
+        Band 2 Moderate: 6.00 < pers_pevi <= 7.70
+        Band 3 High:     7.70 < pers_pevi <= 10.30
+        Band 4 Extreme:  pers_pevi > 10.30
+
+    NOTE: Do NOT use this function for base PEVI values — use get_base_pevi_band() instead.
     """
     val = float(pers_pevi)
     if val <= 6.00:
@@ -274,6 +282,32 @@ def get_personalized_risk_band(pers_pevi: float) -> str:
         return "High (Band 3)"
     else:
         return "Extreme (Band 4)"
+
+
+def get_base_pevi_band(base_pevi: float) -> str:
+    """
+    Returns the relative vulnerability band for a **Base PEVI** score.
+    Uses the documented base PEVI quartile thresholds derived from the
+    unweighted 40-park baseline distribution (ambient green space risk):
+        Band 1 Low:      base_pevi <= 4.13  (Q1)
+        Band 2 Moderate: 4.13 < base_pevi <= 4.81  (Q2)
+        Band 3 High:     4.81 < base_pevi <= 5.65  (Q3)
+        Band 4 Highest:  base_pevi > 5.65  (Q4)
+
+    NOTE: Do NOT use get_personalized_risk_band() for base PEVI — its thresholds
+    are calibrated to the personalized scale (6.0 / 7.7 / 10.3) and will severely
+    underclassify base PEVI values (e.g. 6.23 → "Moderate" instead of "Highest").
+    """
+    val = float(base_pevi)
+    if val <= 4.13:
+        return "Low (Band 1)"
+    elif val <= 4.81:
+        return "Moderate (Band 2)"
+    elif val <= 5.65:
+        return "High (Band 3)"
+    else:
+        return "Highest (Band 4)"
+
 
 
 # =================================================================================================

@@ -44,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_interp_loc_spatial ON interpolated_locations USIN
 CREATE INDEX IF NOT EXISTS idx_interp_loc_ts ON interpolated_locations (timestamp);
 CREATE INDEX IF NOT EXISTS idx_interp_loc_name ON interpolated_locations (location_name);
 
--- Create PEVI Scores Table (Park Environmental Vulnerability Index)
+-- Create PEVI Scores Table (Personalized Exposure Vulnerability Index)
 CREATE TABLE IF NOT EXISTS pevi_scores (
     id BIGSERIAL PRIMARY KEY,
     location_name VARCHAR(255) NOT NULL,

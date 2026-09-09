@@ -1,12 +1,12 @@
 # HawaGuide 🌿💨
 
-> **Hyperlocal Air Quality Intelligence & Park Environmental Vulnerability Index (PEVI) for Delhi NCR**
+> **Hyperlocal Air Quality Intelligence & Personalized Exposure Vulnerability Index (PEVI) for Delhi NCR**
 
 HawaGuide is an advanced spatial air quality monitoring and modeling platform designed for Delhi National Capital Region (NCR). It ingests real-time and historical multi-pollutant measurements from regulatory monitoring networks (CPCB, DPCC, IMD, IITM, UPPCB, HSPCB) via the OpenAQ v3 API, persists geospatial observations in PostGIS, and uses geostatistical Ordinary Kriging to estimate continuous pollution exposure across urban parks and green spaces.
 
 ---
 
-##  Project Architecture
+## 🏛 Project Architecture
 
 ```text
 HawaGuide/
@@ -33,7 +33,7 @@ HawaGuide/
 
 ---
 
-##  Core Geostatistical Modeling: Ordinary Kriging
+## 🔬 Core Geostatistical Modeling: Ordinary Kriging
 
 HawaGuide employs **Ordinary Kriging (OK)** using a spherical variogram model to interpolate continuous concentration fields for 6 key air pollutants:
 - **Particulate Matter**: $\text{PM}_{2.5}$, $\text{PM}_{10}$
@@ -53,9 +53,9 @@ Model performance is evaluated via **Leave-One-Station-Out Cross-Validation (LOO
 
 ---
 
-## 🍃 Park Environmental Vulnerability Index (PEVI) Methodology
+## 🍃 Personalized Exposure Vulnerability Index (PEVI) Methodology
 
-The **Park Environmental Vulnerability Index (PEVI)** is a continuous, multipollutant exposure and health vulnerability metric calculated across all 40 urban green spaces in Delhi NCR. It quantifies the combined excess health risk from concurrent inhalation of 6 key air pollutants.
+The **Personalized Exposure Vulnerability Index (PEVI)** is a continuous, multipollutant exposure and health vulnerability metric calculated across all 40 urban green spaces in Delhi NCR. It quantifies the combined excess health risk from concurrent inhalation of 6 key air pollutants.
 
 ### 1. Published Base Formulation: Canada AQHI (Stieb et al. 2008)
 The foundational risk-additive mathematical structure directly adopts the peer-reviewed **Air Quality Health Index (AQHI)** methodology established by Health Canada and Environment Canada:
@@ -183,7 +183,7 @@ In metropolitan Delhi NCR, air pollution is heavily influenced by micro-scale so
   - **PM10 Hotspots (Anand Vihar, Sector-125 Noida, Punjabi Bagh)**: Average underestimation deficit of **$+56.09\ \mu\text{g/m}^3$** (a **17.4%** systemic deficit relative to actual ground measurements).
 
 ### 3. Why this Tradeoff is Chosen for HawaGuide
-For regional park exposure estimation and Park Environmental Vulnerability Index (PEVI) calculation, this spatial smoothing is desirable:
+For regional park exposure estimation and Personalized Exposure Vulnerability Index (PEVI) calculation, this spatial smoothing is desirable:
 - It eliminates spurious numerical instability and runaway artifacts between sparse monitors.
 - It produces stable, continuous background concentration baselines across park polygons without over-attributing localized road-edge anomalies to expansive green spaces.
 
@@ -244,7 +244,7 @@ Air quality estimates are computed for 40 real, named urban green spaces and sto
 
 ---
 
-##  Quickstart & Execution
+## 🚀 Quickstart & Execution
 
 ### 1. Database Setup
 Ensure PostgreSQL 18 with PostGIS 3.6 is running, configure `backend/.env`, and execute:
@@ -291,12 +291,14 @@ Ensure PostgreSQL 18 with PostGIS 3.6 is running, configure `backend/.env`, and 
 
 ---
 
-##  Personalized PEVI & Multi-Objective Spatial Park Optimizer
+## 🎯 Personalized PEVI & Multi-Objective Spatial Park Optimizer
 
 ### 1. Personalized PEVI Formulation
-To translate static ambient risk into actionable personalized guidance, the base Park Environmental Vulnerability Index is adjusted for demographic vulnerability, pre-existing health status, and cumulative exposure duration:
+To translate static ambient risk into actionable personalized guidance, the base Personalized Exposure Vulnerability Index is adjusted for demographic vulnerability, pre-existing health status, and cumulative exposure duration:
 
-$$\text{Personalized\_PEVI} = \text{Base\_PEVI} \times \text{age\_multiplier} \times \text{condition\_multiplier} \times \left(1 + 0.15 \times \text{duration\_hours}\right)$$
+```
+Personalized_PEVI = Base_PEVI × age_multiplier × condition_multiplier × (1 + 0.15 × duration_hours)
+```
 
 #### Multiplier Specifications:
 * **`age_multiplier`**:
@@ -325,10 +327,15 @@ For any user starting coordinate $(\text{lat}, \text{lon})$, the optimizer balan
 1. **Geodetic Proximity via PostGIS**:
    Computes exact geodesic distances (in meters / km) from user coordinates to all 40 parks using PostGIS `ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography)`.
 2. **Min-Max Feature Normalization**:
-   Normalizes both $\text{Personalized\_PEVI}$ and $\text{distance\_km}$ across all 40 candidate parks to a $[0, 1]$ scale:
-   $$\text{norm\_risk} = \frac{\text{risk} - \min(\text{risk})}{\max(\text{risk}) - \min(\text{risk})}, \quad \text{norm\_distance} = \frac{\text{dist} - \min(\text{dist})}{\max(\text{dist}) - \min(\text{dist})}$$
+   Normalizes both `Personalized_PEVI` and `distance_km` across all 40 candidate parks to a `[0, 1]` scale:
+   ```
+   norm_risk     = (risk - min(risk)) / (max(risk) - min(risk))
+   norm_distance = (dist - min(dist)) / (max(dist) - min(dist))
+   ```
 3. **Composite Trade-Off Scoring**:
-   $$\text{Score} = \alpha \times \text{norm\_risk} + (1 - \alpha) \times \text{norm\_distance} \quad (\text{lower is better})$$
+   ```
+   Score = α × norm_risk + (1 - α) × norm_distance    (lower is better)
+   ```
    * $\alpha = 1.0 \rightarrow$ Purely lowest pollution risk.
    * $\alpha = 0.0 \rightarrow$ Purely closest geographic proximity.
    * $\alpha = 0.5 \rightarrow$ Balanced health-travel trade-off.

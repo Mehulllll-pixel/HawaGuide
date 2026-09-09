@@ -1,11 +1,11 @@
 """
 ===================================================================================================
-HawaGuide - Park Environmental Vulnerability Index (PEVI) Engine
+HawaGuide - Personalized Exposure Vulnerability Index (PEVI) Engine
 ===================================================================================================
 
 Module Overview:
 ----------------
-This module calculates the Park Environmental Vulnerability Index (PEVI) for urban green spaces
+This module calculates the Personalized Exposure Vulnerability Index (PEVI) for urban green spaces
 across Delhi NCR. The index is built upon the empirical excess-risk formulation of Canada's published
 Air Quality Health Index (AQHI) methodology (Stieb et al. 2008) and extended to provide a comprehensive
 multi-pollutant vulnerability assessment across 6 target pollutants (O3, NO2, PM2.5, PM10, SO2, CO).
@@ -531,7 +531,7 @@ def print_pevi_rankings(df_results: pd.DataFrame):
     timestamp_str = str(df_results["timestamp"].iloc[0])
 
     print("\n" + "=" * 115)
-    print("      HAWAGUIDE - PARK ENVIRONMENTAL VULNERABILITY INDEX (PEVI) RANKINGS")
+    print("      HAWAGUIDE - PERSONALIZED EXPOSURE VULNERABILITY INDEX (PEVI) RANKINGS")
     print("=" * 115)
     print(f"Evaluation Snapshot: {timestamp_str}")
     print("Total Urban Parks Assessed: 40 Locations across Delhi NCR")

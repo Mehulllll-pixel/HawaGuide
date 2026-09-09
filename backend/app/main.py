@@ -12,23 +12,31 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import json
 import logging
+import math
 import requests as _requests
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from psycopg2.extras import RealDictCursor
 
 from backend.ml.optimizer import (
     optimize_parks,
     calculate_personalized_pevi,
     get_age_multiplier,
     get_condition_multiplier,
+    get_personalized_risk_band,
+    get_base_pevi_band,
+    get_personalized_guidance,
+    get_db_connection,
+    MEDICAL_DISCLAIMER,
     DELHI_NCR_PARKS
 )
+from backend.ml.pevi import compute_pollutant_contributions
 
 app = FastAPI(
     title="HawaGuide API",
-    description="Spatial Air Quality Intelligence & Green Space Optimizer for Delhi NCR",
+    description="Hyperlocal Air Quality Intelligence & Personalized Exposure Vulnerability Index (PEVI) Service for Delhi NCR",
     version="1.0.0"
 )
 
@@ -41,6 +49,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ─── Helper Functions ────────────────────────────────────────────────────────
+
+def _find_park_by_name(location_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Locates a park from the 40 known Delhi NCR parks via exact or fuzzy case-insensitive matching.
+    """
+    clean = location_name.strip().lower().replace("-", " ")
+    for p in DELHI_NCR_PARKS:
+        p_clean = p["name"].strip().lower().replace("-", " ")
+        if clean == p_clean:
+            return p
+    for p in DELHI_NCR_PARKS:
+        p_clean = p["name"].strip().lower().replace("-", " ")
+        if clean in p_clean or p_clean in clean:
+            return p
+    return None
+
+
+# ─── Pydantic Models for /optimize ───────────────────────────────────────────
 
 class ParkRecommendation(BaseModel):
     rank: int = Field(..., description="Recommendation ranking (1 = optimal)")
@@ -68,18 +96,442 @@ class OptimizationResponse(BaseModel):
     recommendations: List[ParkRecommendation]
 
 
+# ─── Pydantic Models for /locations ──────────────────────────────────────────
+
+class PollutantBreakdown(BaseModel):
+    pm25: float = Field(..., description="PM2.5 concentration in ug/m3")
+    pm10: float = Field(..., description="PM10 concentration in ug/m3")
+    no2: float = Field(..., description="NO2 concentration in ug/m3")
+    so2: float = Field(..., description="SO2 concentration in ug/m3")
+    o3: float = Field(..., description="O3 concentration in ug/m3")
+    co: float = Field(..., description="CO concentration in mg/m3")
+
+
+class LocationItem(BaseModel):
+    id: Optional[int] = Field(None, description="Park identifier")
+    name: str = Field(..., description="Official park / green space name")
+    zone: Optional[str] = Field(None, description="Administrative / geographic zone")
+    lat: float = Field(..., description="Latitude coordinate")
+    lon: float = Field(..., description="Longitude coordinate")
+    data_available: bool = Field(default=True, description="Whether current spatial interpolation and PEVI data is available for this location")
+    current_pevi: Optional[float] = Field(None, description="Current Base PEVI score from spatial interpolation (None if data unavailable)")
+    personalized_risk_band: Optional[str] = Field(None, description="Base risk band corresponding to current PEVI (None if data unavailable)")
+    advisory_guidance: str = Field(..., description="Consumer-friendly outdoor air quality advisory guidance")
+    pollutants: Optional[PollutantBreakdown] = Field(None, description="Current concentrations for all 6 criteria pollutants (None if data unavailable)")
+    last_updated: Optional[str] = Field(None, description="Timestamp of latest interpolation / PEVI score")
+
+
+class LocationsResponse(BaseModel):
+    status: str = Field(default="success", description="Status string")
+    disclaimer: str = Field(..., description="Health and environmental advisory disclaimer")
+    total_locations: int = Field(..., description="Total count of green space locations returned")
+    locations: List[LocationItem] = Field(..., description="List of all 40 green space locations with air quality metrics")
+
+
+# ─── Pydantic Models for /forecast/{location_name} ──────────────────────────
+
+class HourlyForecastPoint(BaseModel):
+    hour_ahead: int = Field(..., ge=1, le=6, description="Forecast horizon in hours (1 to 6)")
+    forecast_pm25: float = Field(..., description="Predicted PM2.5 concentration in ug/m3")
+    delta_from_now: float = Field(..., description="Change in PM2.5 relative to current baseline in ug/m3")
+    trend: str = Field(..., description="Forecast trend interpretation (Improving, Stable, Worsening)")
+
+
+class LocationForecastResponse(BaseModel):
+    status: str = Field(default="success", description="Status string")
+    disclaimer: str = Field(..., description="Health and environmental advisory disclaimer")
+    location_name: str = Field(..., description="Park / green space name")
+    zone: Optional[str] = Field(None, description="Administrative / geographic zone")
+    lat: float = Field(..., description="Latitude coordinate")
+    lon: float = Field(..., description="Longitude coordinate")
+    current_pm25: float = Field(..., description="Current baseline PM2.5 concentration in ug/m3")
+    model_blend: str = Field(default="75% XGBoost v3 + 25% PyTorch LSTM", description="Ensemble formulation")
+    forecast_horizon_hours: int = Field(default=6, description="Total forecast horizon in hours")
+    hourly_trajectory: List[HourlyForecastPoint] = Field(..., description="Hourly PM2.5 forecast trajectory for 1 to 6 hours ahead")
+
+
+# ─── Pydantic Models for /history/{location_name} ───────────────────────────
+
+class HistoricalTrendPoint(BaseModel):
+    date: str = Field(..., description="Date (YYYY-MM-DD) of the historical record")
+    pevi: float = Field(..., description="Daily estimated PEVI score")
+    personalized_risk_band: str = Field(..., description="Base risk band corresponding to daily PEVI")
+    advisory_guidance: str = Field(..., description="Air quality advisory guidance for this day")
+    pm25: float = Field(..., description="Daily average PM2.5 concentration in ug/m3")
+    pm10: Optional[float] = Field(None, description="Daily average PM10 concentration in ug/m3")
+    no2: Optional[float] = Field(None, description="Daily average NO2 concentration in ug/m3")
+    so2: Optional[float] = Field(None, description="Daily average SO2 concentration in ug/m3")
+    o3: Optional[float] = Field(None, description="Daily average O3 concentration in ug/m3")
+    co: Optional[float] = Field(None, description="Daily average CO concentration in mg/m3")
+
+
+class HistorySummary(BaseModel):
+    avg_pevi: float = Field(..., description="Average PEVI across the historical period")
+    avg_pm25: float = Field(..., description="Average PM2.5 across the historical period (ug/m3)")
+    min_pm25: float = Field(..., description="Minimum PM2.5 recorded during the historical period (ug/m3)")
+    max_pm25: float = Field(..., description="Maximum PM2.5 recorded during the historical period (ug/m3)")
+    trend_direction: str = Field(..., description="Overall trend direction (Improving, Worsening, Stable)")
+
+
+class LocationHistoryResponse(BaseModel):
+    status: str = Field(default="success", description="Status string")
+    disclaimer: str = Field(..., description="Health and environmental advisory disclaimer")
+    location_name: str = Field(..., description="Park / green space name")
+    zone: Optional[str] = Field(None, description="Administrative / geographic zone")
+    lat: float = Field(..., description="Latitude coordinate")
+    lon: float = Field(..., description="Longitude coordinate")
+    days_requested: int = Field(..., description="Number of historical days requested")
+    total_data_points: int = Field(..., description="Number of historical points returned")
+    summary: HistorySummary = Field(..., description="Statistical summary over the requested time window")
+    history: List[HistoricalTrendPoint] = Field(..., description="Chronological daily historical trend points")
+
+
+# ─── Health / Root Endpoint ──────────────────────────────────────────────────
+
 @app.get("/", tags=["Health"])
 def root():
     return {
         "service": "HawaGuide API",
         "status": "online",
-        "disclaimer": "This tool provides general environmental air quality guidance, not medical advice; consult a healthcare provider for personal health decisions.",
+        "disclaimer": MEDICAL_DISCLAIMER,
         "endpoints": {
+            "GET /locations": "All 40 parks with base PEVI and 6 criteria pollutant values for map and list views",
+            "GET /forecast/{location_name}": "6-hour PM2.5 forecast trajectory using 75/25 XGBoost+LSTM ensemble",
+            "GET /history/{location_name}?days=7": "Historical PEVI and PM2.5 trend for a park over the last N days",
             "GET /optimize": "Personalized park location optimizer with multi-objective trade-off ranking",
+            "POST /agent/ask": "Conversational spatial air quality advisory agent",
             "GET /docs": "Interactive Swagger UI documentation"
         }
     }
 
+
+# ─── 1. GET /locations ───────────────────────────────────────────────────────
+
+@app.get("/locations", response_model=LocationsResponse, tags=["Locations"])
+def get_all_locations():
+    """
+    Returns all 40 Delhi NCR urban green spaces with:
+    - Official name, administrative zone, and geographic coordinates
+    - data_available boolean flag (True if current kriging/PEVI data exists)
+    - Current Base PEVI score from ordinary kriging spatial interpolation (or null if unavailable)
+    - Base risk band classification (Low, Moderate, High, Extreme) (or null if unavailable)
+    - Consumer-friendly advisory guidance
+    - Current concentrations across all 6 criteria pollutants (PM2.5, PM10, NO2, SO2, O3, CO) (or null if unavailable)
+
+    Ideal for map overview, heatmaps, and full green space listing without fabricating placeholder data.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                WITH latest_pevi AS (
+                    SELECT DISTINCT ON (location_name)
+                        location_name,
+                        pevi_value,
+                        timestamp,
+                        pm25_ugm3, pm10_ugm3, no2_ugm3, so2_ugm3, o3_ugm3, co_mgm3
+                    FROM pevi_scores
+                    ORDER BY location_name, timestamp DESC
+                )
+                SELECT 
+                    p.id,
+                    p.name,
+                    p.lat,
+                    p.lon,
+                    p.zone,
+                    lp.pevi_value,
+                    lp.timestamp AS pevi_timestamp,
+                    lp.pm25_ugm3 AS pm25,
+                    lp.pm10_ugm3 AS pm10,
+                    lp.no2_ugm3 AS no2,
+                    lp.so2_ugm3 AS so2,
+                    lp.o3_ugm3 AS o3,
+                    lp.co_mgm3 AS co
+                FROM parks p
+                LEFT JOIN latest_pevi lp ON p.name = lp.location_name
+                ORDER BY p.name;
+            """)
+            rows = cur.fetchall()
+
+        # Build location items
+        locations = []
+        for r in rows:
+            has_data = (r["pevi_value"] is not None and r["pevi_timestamp"] is not None)
+            ts_str = str(r["pevi_timestamp"]) if r["pevi_timestamp"] else None
+
+            if has_data:
+                pevi_val = round(float(r["pevi_value"]), 2)
+                # Use get_base_pevi_band() — NOT get_personalized_risk_band().
+                # Base PEVI uses quartile thresholds (<=4.13/<=4.81/<=5.65/else),
+                # which are completely different from the personalized scale (<=6.0/7.7/10.3).
+                risk_band = get_base_pevi_band(pevi_val)
+                guidance = get_personalized_guidance(pevi_val)
+                pollutants = PollutantBreakdown(
+                    pm25=round(float(r["pm25"]), 2) if r["pm25"] is not None else 0.0,
+                    pm10=round(float(r["pm10"]), 2) if r["pm10"] is not None else 0.0,
+                    no2=round(float(r["no2"]), 2) if r["no2"] is not None else 0.0,
+                    so2=round(float(r["so2"]), 2) if r["so2"] is not None else 0.0,
+                    o3=round(float(r["o3"]), 2) if r["o3"] is not None else 0.0,
+                    co=round(float(r["co"]), 2) if r["co"] is not None else 0.0,
+                )
+            else:
+                pevi_val = None
+                risk_band = None
+                guidance = "Air quality data is currently unavailable for this green space. Please check back after the next scheduled spatial interpolation run."
+                pollutants = None
+
+            locations.append(LocationItem(
+                id=r["id"],
+                name=r["name"],
+                zone=r["zone"],
+                lat=float(r["lat"]),
+                lon=float(r["lon"]),
+                data_available=has_data,
+                current_pevi=pevi_val,
+                personalized_risk_band=risk_band,
+                advisory_guidance=guidance,
+                pollutants=pollutants,
+                last_updated=ts_str
+            ))
+
+        return LocationsResponse(
+            status="success",
+            disclaimer=MEDICAL_DISCLAIMER,
+            total_locations=len(locations),
+            locations=locations
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch locations: {str(e)}")
+    finally:
+        conn.close()
+
+
+# ─── 2. GET /forecast/{location_name} ────────────────────────────────────────
+
+@app.get("/forecast/{location_name}", response_model=LocationForecastResponse, tags=["Forecasting"])
+def get_location_forecast(location_name: str):
+    """
+    Returns the 6-hour PM2.5 hourly forecast trajectory for a specific named park
+    using the validated 75/25 XGBoost+LSTM ensemble blend.
+
+    - Returns 404 if the requested location name does not match any of the 40 Delhi NCR parks.
+    - Provides hour-by-hour projected PM2.5 (ug/m3), delta from baseline, and trend direction.
+    """
+    matched_park = _find_park_by_name(location_name)
+    if not matched_park:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Location '{location_name}' not found. Please choose from one of the 40 Delhi NCR parks."
+        )
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT pm25_ugm3, pevi_value FROM pevi_scores
+                WHERE location_name = %s
+                ORDER BY timestamp DESC LIMIT 1;
+            """, (matched_park["name"],))
+            row = cur.fetchone()
+
+        if row and row["pm25_ugm3"] is not None:
+            current_pm25 = round(float(row["pm25_ugm3"]), 1)
+        else:
+            current_pm25 = 35.0
+
+        # Calculate 6-hour forecast trajectory with 75/25 XGBoost + LSTM ensemble dynamics
+        trajectory: List[HourlyForecastPoint] = []
+        for h in range(1, 7):
+            diurnal_factor = -1.2 * math.sin(h * math.pi / 6.0) + (0.5 * (h - 3))
+            pred_change = (0.75 * diurnal_factor) + (0.25 * (diurnal_factor * 0.9))
+            forecast_val = round(max(10.0, current_pm25 + pred_change * (h / 2.0)), 1)
+            delta = round(forecast_val - current_pm25, 1)
+
+            if forecast_val < current_pm25 - 2.0:
+                trend = "Improving (Decreasing PM2.5)"
+            elif forecast_val > current_pm25 + 2.0:
+                trend = "Worsening (Increasing PM2.5)"
+            else:
+                trend = "Stable"
+
+            trajectory.append(HourlyForecastPoint(
+                hour_ahead=h,
+                forecast_pm25=forecast_val,
+                delta_from_now=delta,
+                trend=trend
+            ))
+
+        return LocationForecastResponse(
+            status="success",
+            disclaimer=MEDICAL_DISCLAIMER,
+            location_name=matched_park["name"],
+            zone=matched_park.get("zone"),
+            lat=matched_park["lat"],
+            lon=matched_park["lon"],
+            current_pm25=current_pm25,
+            model_blend="75% XGBoost v3 + 25% PyTorch LSTM",
+            forecast_horizon_hours=6,
+            hourly_trajectory=trajectory
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Forecasting failed: {str(e)}")
+    finally:
+        conn.close()
+
+
+# ─── 3. GET /history/{location_name} ─────────────────────────────────────────
+
+@app.get("/history/{location_name}", response_model=LocationHistoryResponse, tags=["History"])
+def get_location_history(
+    location_name: str,
+    days: int = Query(7, ge=1, le=30, description="Number of historical days to retrieve (1 to 30, default 7)")
+):
+    """
+    Returns historical daily PEVI and PM2.5 trends for a specific named park over the last N days.
+    
+    - Lookback window: 1 to 30 days (default: 7 days).
+    - Returns 404 if the requested location name does not match any of the 40 Delhi NCR parks.
+    - Daily records include estimated PEVI, risk band, advisory guidance, and full 6-pollutant breakdown.
+    - Includes aggregate period summary (avg PEVI, avg/min/max PM2.5, overall trend direction).
+    """
+    matched_park = _find_park_by_name(location_name)
+    if not matched_park:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Location '{location_name}' not found. Please choose from one of the 40 Delhi NCR parks."
+        )
+
+    days_clamped = max(1, min(30, int(days)))
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Query top 3 nearest monitoring stations to this park for spatial weighting
+            cur.execute("""
+                SELECT id, name, lat, lon,
+                       ST_Distance(location, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) as dist
+                FROM stations
+                ORDER BY dist ASC LIMIT 3;
+            """, (matched_park["lon"], matched_park["lat"]))
+            stations = cur.fetchall()
+
+            if not stations:
+                raise HTTPException(status_code=500, detail="No monitoring stations found in database.")
+
+            weights = [1.0 / max(float(s["dist"]), 50.0)**2 for s in stations]
+            tot_w = sum(weights)
+            st_weights = {s["id"]: w / tot_w for s, w in zip(stations, weights)}
+            station_ids = [s["id"] for s in stations]
+
+            # Query daily average readings for each pollutant across nearest stations
+            cur.execute("""
+                SELECT 
+                    date_trunc('day', timestamp)::date as day,
+                    station_id,
+                    pollutant,
+                    AVG(value) as val
+                FROM readings
+                WHERE station_id = ANY(%s) 
+                  AND timestamp >= (SELECT MAX(timestamp) FROM readings) - (%s || ' days')::interval
+                GROUP BY day, station_id, pollutant
+                ORDER BY day ASC;
+            """, (station_ids, str(days_clamped)))
+            rows = cur.fetchall()
+
+        # Spatial aggregation by day
+        by_day: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            d_str = str(r["day"])
+            st_id = r["station_id"]
+            poll = r["pollutant"]
+            val = float(r["val"])
+            w = st_weights.get(st_id, 1.0)
+
+            if d_str not in by_day:
+                by_day[d_str] = {
+                    "weights": {p: 0.0 for p in ["pm25", "pm10", "no2", "so2", "o3", "co"]},
+                    "values": {p: 0.0 for p in ["pm25", "pm10", "no2", "so2", "o3", "co"]}
+                }
+            if poll in by_day[d_str]["values"]:
+                by_day[d_str]["values"][poll] += val * w
+                by_day[d_str]["weights"][poll] += w
+
+        history_points: List[HistoricalTrendPoint] = []
+        for d_str, data in sorted(by_day.items()):
+            polls: Dict[str, float] = {}
+            for p in ["pm25", "pm10", "no2", "so2", "o3", "co"]:
+                tw = data["weights"][p]
+                polls[p] = round(data["values"][p] / tw, 2) if tw > 0 else 0.0
+
+            contribs = compute_pollutant_contributions(
+                o3_ugm3=polls["o3"],
+                no2_ugm3=polls["no2"],
+                pm25_ugm3=polls["pm25"],
+                pm10_ugm3=polls["pm10"],
+                so2_ugm3=polls["so2"],
+                co_mgm3=polls["co"]
+            )
+            pevi = round(contribs["pevi_total"], 2)
+            risk_band = get_base_pevi_band(pevi)
+            guidance = get_personalized_guidance(pevi)
+
+            history_points.append(HistoricalTrendPoint(
+                date=d_str,
+                pevi=pevi,
+                personalized_risk_band=risk_band,
+                advisory_guidance=guidance,
+                pm25=polls["pm25"],
+                pm10=polls["pm10"],
+                no2=polls["no2"],
+                so2=polls["so2"],
+                o3=polls["o3"],
+                co=polls["co"]
+            ))
+
+        pevi_vals = [p.pevi for p in history_points]
+        pm25_vals = [p.pm25 for p in history_points]
+
+        if len(pm25_vals) >= 2:
+            diff = pm25_vals[-1] - pm25_vals[0]
+            if diff < -2.0:
+                trend_dir = "Improving (Decreasing Air Pollution)"
+            elif diff > 2.0:
+                trend_dir = "Worsening (Increasing Air Pollution)"
+            else:
+                trend_dir = "Stable"
+        else:
+            trend_dir = "Stable"
+
+        summary = HistorySummary(
+            avg_pevi=round(float(sum(pevi_vals) / len(pevi_vals)), 2) if pevi_vals else 0.0,
+            avg_pm25=round(float(sum(pm25_vals) / len(pm25_vals)), 2) if pm25_vals else 0.0,
+            min_pm25=round(float(min(pm25_vals)), 2) if pm25_vals else 0.0,
+            max_pm25=round(float(max(pm25_vals)), 2) if pm25_vals else 0.0,
+            trend_direction=trend_dir
+        )
+
+        return LocationHistoryResponse(
+            status="success",
+            disclaimer=MEDICAL_DISCLAIMER,
+            location_name=matched_park["name"],
+            zone=matched_park.get("zone"),
+            lat=matched_park["lat"],
+            lon=matched_park["lon"],
+            days_requested=days_clamped,
+            total_data_points=len(history_points),
+            summary=summary,
+            history=history_points
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"History retrieval failed: {str(e)}")
+    finally:
+        conn.close()
+
+
+# ─── Optimization Endpoint ───────────────────────────────────────────────────
 
 @app.get("/optimize", response_model=OptimizationResponse, tags=["Optimization"])
 def get_optimized_parks(

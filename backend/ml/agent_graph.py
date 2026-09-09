@@ -8,7 +8,7 @@ Graph Architecture:
   (START)
      │
      ▼
-[fetch_current]   ──> Queries current PEVI & dominant pollutant contributions for location
+[fetch_current]   ──> Queries current Personalized Exposure Vulnerability Index (PEVI) & dominant pollutant contributions for location
      │
      ▼
 [fetch_forecast]  ──> Fetches 6-hour PM2.5 trajectory from 75/25 XGBoost+LSTM ensemble

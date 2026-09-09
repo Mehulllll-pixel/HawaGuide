@@ -7,7 +7,7 @@ Module Overview:
 ----------------
 This module implements geostatistical spatial interpolation using Ordinary Kriging (pykrige)
 to estimate continuous air quality fields across Delhi NCR from discrete regulatory monitoring
-stations. It provides inputs for the Park Environmental Vulnerability Index (PEVI) across 40
+stations. It provides inputs for the Personalized Exposure Vulnerability Index (PEVI) across 40
 key urban green spaces.
 
 ===================================================================================================

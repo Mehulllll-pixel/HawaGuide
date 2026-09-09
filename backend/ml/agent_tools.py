@@ -4,9 +4,9 @@ HawaGuide — LangGraph Agent Tools Wrapping Existing ML & Geostatistical Pipeli
 ===================================================================================================
 
 This module provides modular tools for the LangGraph agent:
-  1. get_current_pevi: Current multi-pollutant vulnerability from pevi_scores table.
+  1. get_current_pevi: Current multi-pollutant vulnerability from pevi_scores table (Personalized Exposure Vulnerability Index).
   2. get_forecast: 1-6 hour PM2.5 forecast from the validated 75/25 XGBoost+LSTM ensemble.
-  3. compute_personalized_risk: Extended personalized PEVI with age, condition, smoker, and minute-ventilation activity multipliers.
+  3. compute_personalized_risk: Extended Personalized Exposure Vulnerability Index (PEVI) with age, condition, smoker, and minute-ventilation activity multipliers.
   4. get_park_options: Multi-objective 40-park spatial optimizer with PostGIS distance and consumer advisory guidance.
 ===================================================================================================
 """
