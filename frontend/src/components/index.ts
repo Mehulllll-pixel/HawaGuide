@@ -1,2 +1,2 @@
-// Base component exports placeholder
-export {};
+export { Hero } from './Hero';
+export { LocationCard } from './LocationCard';
