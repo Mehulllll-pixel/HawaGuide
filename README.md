@@ -1,4 +1,4 @@
-# HawaGuide 💨
+# HawaGuide 
 
 > **Hyperlocal Air Quality Intelligence & Personalized Exposure Vulnerability Index (PEVI) for Delhi NCR**
 
@@ -6,7 +6,7 @@ HawaGuide is an advanced spatial air quality monitoring and modeling platform de
 
 ---
 
-## 📸 Screenshots
+##  Screenshots
 
 ### 1. Interactive Liquid Glass Hero
 ![Interactive Liquid Glass Hero](docs/screenshots/hero.png)
@@ -73,7 +73,7 @@ Model performance is evaluated via **Leave-One-Station-Out Cross-Validation (LOO
 
 ---
 
-## 🍃 Personalized Exposure Vulnerability Index (PEVI) Methodology
+##  Personalized Exposure Vulnerability Index (PEVI) Methodology
 
 The **Personalized Exposure Vulnerability Index (PEVI)** is a continuous, multipollutant exposure and health vulnerability metric calculated across all 40 urban green spaces in Delhi NCR. It quantifies the combined excess health risk from concurrent inhalation of 6 key air pollutants.
 
@@ -247,7 +247,7 @@ Averaging across the most recent 24 hours smooths transient single-sensor spikes
 
 ---
 
-## 🍃 40 Configured Delhi NCR Parks & Green Spaces
+##  40 Configured Delhi NCR Parks & Green Spaces
 
 Air quality estimates are computed for 40 real, named urban green spaces and stored in the PostGIS `interpolated_locations` table:
 1. **Lodhi Garden** (Central Delhi)
