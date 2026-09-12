@@ -1,4 +1,4 @@
-# HawaGuide 
+# 🌸💨 HawaGuide 
 
 > **Hyperlocal Air Quality Intelligence & Personalized Exposure Vulnerability Index (PEVI) for Delhi NCR**
 
