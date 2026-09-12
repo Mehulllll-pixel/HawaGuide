@@ -6,12 +6,25 @@ import { getLocations } from './api/locations'
 import type { LocationItem } from './api/types'
 import { getPeviColor } from './utils/peviColor'
 import { AgentPanel } from './components/AgentPanel'
+import { HealthProfileBanner } from './components/HealthProfileBanner'
+import { PeviExplainerModal } from './components/PeviExplainerModal'
+import {
+  type HealthProfile,
+  calculatePersonalizedPevi,
+  getPersonalizedBand,
+  getPersonalizedGuidance,
+  isDefaultProfile,
+  loadProfile,
+} from './utils/peviPersonalize'
 
 export default function App() {
   const [query, setQuery] = useState('')
   const [selectedTime, setSelectedTime] = useState('12 PM')
   const [locations, setLocations] = useState<LocationItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [profile, setProfile] = useState<HealthProfile>(() => loadProfile())
+  const [showExplainer, setShowExplainer] = useState(false)
+  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     getLocations()
@@ -36,21 +49,39 @@ export default function App() {
     [locations],
   )
 
-  // Map locations → park-card shape expected by the v0 design
+  // Map locations → park-card shape with optional personalization
+  const personalized = !isDefaultProfile(profile)
+
   const parks = useMemo(
     () =>
       locations
         .filter((l) => l.data_available && l.current_pevi !== null)
-        .map((l) => ({
-          name: l.name,
-          area: l.zone ?? '',
-          score: l.current_pevi as number,
-          risk: l.personalized_risk_band ?? '',
-          pm25: l.pollutants?.pm25 ?? 0,
-          pm10: l.pollutants?.pm10 ?? 0,
-          color: getPeviColor(l.current_pevi, 3.12, 7.07),
-        })),
-    [locations],
+        .map((l) => {
+          const basePevi = l.current_pevi as number
+          const displayPevi = personalized
+            ? calculatePersonalizedPevi(basePevi, profile)
+            : basePevi
+          const risk = personalized
+            ? getPersonalizedBand(displayPevi)
+            : (l.personalized_risk_band ?? '')
+          const advisory = personalized
+            ? getPersonalizedGuidance(displayPevi)
+            : l.advisory_guidance
+          // Color uses personalized value; extend max range for high-mult values
+          const colorMax = personalized ? Math.max(7.07, displayPevi * 1.05) : 7.07
+          return {
+            name: l.name,
+            area: l.zone ?? '',
+            basePevi,
+            score: displayPevi,
+            risk,
+            advisory,
+            pm25: l.pollutants?.pm25 ?? 0,
+            pm10: l.pollutants?.pm10 ?? 0,
+            color: getPeviColor(displayPevi, 3.12, colorMax),
+          }
+        }),
+    [locations, profile, personalized],
   )
 
   const filteredParks = useMemo(
@@ -60,6 +91,15 @@ export default function App() {
       ),
     [parks, query],
   )
+
+  const isSearching = query.trim().length > 0
+
+  const displayedParks = useMemo(() => {
+    if (isSearching || expanded) {
+      return filteredParks
+    }
+    return filteredParks.slice(0, 8)
+  }, [filteredParks, isSearching, expanded])
 
   // Build forecast rail from live avg (placeholder until /forecast endpoint is wired)
   const forecast = useMemo(() => {
@@ -124,6 +164,14 @@ export default function App() {
           <a href="#spaces">Green spaces</a>
           <a href="#forecast">Forecast</a>
           <a href="#agent">Ask the agent</a>
+          <button
+            type="button"
+            className="nav-pevi-button"
+            onClick={() => setShowExplainer(true)}
+            aria-label="Why PEVI, not just AQI?"
+          >
+            Why PEVI?
+          </button>
         </nav>
         <button
           className="header-location"
@@ -178,7 +226,22 @@ export default function App() {
               <span className="widget-icon pulse-dot" /> Live conditions
             </div>
             <strong className="widget-score">{displayAvg}</strong>
-            <span className="widget-unit">PEVI · Delhi NCR</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 9, gap: 8 }}>
+              <span className="widget-unit" style={{ margin: 0 }}>PEVI · Delhi NCR</span>
+              <button
+                type="button"
+                className="pevi-explainer-chip"
+                onClick={() => setShowExplainer(true)}
+                aria-label="What is PEVI? Open explainer modal"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 16v-4" />
+                  <path d="M12 8h.01" />
+                </svg>
+                <span>What is PEVI?</span>
+              </button>
+            </div>
             <div className="widget-park">
               <span className="park-swatch" />
               <div>
@@ -227,6 +290,9 @@ export default function App() {
           </article>
         </div>
       </section>
+
+      {/* ── Health Profile Banner ──────────────────────────────────────── */}
+      <HealthProfileBanner profile={profile} onProfileChange={setProfile} />
 
       {/* ── Forecast ──────────────────────────────────────────────────────── */}
       <section id="forecast" className="forecast-section">
@@ -282,6 +348,12 @@ export default function App() {
               <br />
               <em>green spaces.</em>
             </h2>
+            {/* PEVI section label */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+              <span style={{ color: '#7190a1', fontSize: 11, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase' }}>
+                Ranked by PEVI
+              </span>
+            </div>
           </div>
           <div className="space-tools">
             <label className="search-box">
@@ -320,7 +392,7 @@ export default function App() {
                   </div>
                 </article>
               ))
-            : filteredParks.map((park) => (
+            : displayedParks.map((park) => (
                 <article
                   key={park.name}
                   className="park-card"
@@ -334,11 +406,35 @@ export default function App() {
                     <span className="park-pin">+</span>
                   </div>
                   <div className="park-score-row">
-                    <span className="park-score">{park.score.toFixed(2)}</span>
-                    <span className="park-risk">{park.risk}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <span className="park-score">{park.score.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+                      <span className="park-risk">{park.risk}</span>
+                      {personalized && (
+                        <span style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          color: '#42cfc0',
+                          letterSpacing: '.05em',
+                          textTransform: 'uppercase',
+                          opacity: .9,
+                        }}>✦ Personalized</span>
+                      )}
+                    </div>
                   </div>
+                  {/* Advisory guidance — plain-language context */}
+                  <p style={{
+                    margin: '8px 0 0',
+                    fontSize: 10.5,
+                    lineHeight: 1.5,
+                    color: '#7190a1',
+                    minHeight: '2lh',
+                  }}>
+                    {park.advisory}
+                  </p>
                   <div className="park-meter">
-                    <span style={{ width: `${((park.score - 3.12) / (7.07 - 3.12)) * 100}%` }} />
+                    <span style={{ width: `${Math.min(100, Math.max(0, ((park.score - 3.12) / (Math.max(7.07, park.score * 1.05) - 3.12)) * 100))}%` }} />
                   </div>
                   <div className="park-readings">
                     <span>
@@ -354,6 +450,42 @@ export default function App() {
                 </article>
               ))}
         </div>
+
+        {!isSearching && filteredParks.length > 8 && (
+          <div className="spaces-expand-container">
+            <button
+              type="button"
+              className="spaces-expand-button"
+              onClick={() => {
+                if (expanded) {
+                  document.getElementById('spaces')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                }
+                setExpanded((prev) => !prev)
+              }}
+              aria-expanded={expanded}
+              aria-controls="park-grid"
+            >
+              <span>{expanded ? 'Show fewer' : `View all ${locations.length || 40} parks`}</span>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.25s ease',
+                }}
+                aria-hidden="true"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+          </div>
+        )}
       </section>
 
       {/* ── Agent ─────────────────────────────────────────────────────────── */}
@@ -375,12 +507,16 @@ export default function App() {
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <footer className="site-footer">
         <span className="brand">
-          <span className="brand-mark">∿</span>
           <span>HawaGuide</span>
         </span>
-        <span>Air moves. We help you move with it.</span>
-        <span>Made for Delhi NCR · 2026</span>
+        <span style={{ fontFamily: "'Fraunces', serif", fontWeight: 400, fontSize: 15 }}>Air moves. We help you move with it.</span>
+        <span style={{ fontFamily: "'Fraunces', serif", fontWeight: 400, fontSize: 15 }}>Made for Delhi NCR · 2026</span>
       </footer>
+      {/* ── PEVI Explainer Modal ────────────────────────────────────────── */}
+      <PeviExplainerModal
+        isOpen={showExplainer}
+        onClose={() => setShowExplainer(false)}
+      />
     </main>
   )
 }

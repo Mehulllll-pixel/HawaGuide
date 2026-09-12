@@ -6,6 +6,26 @@ HawaGuide is an advanced spatial air quality monitoring and modeling platform de
 
 ---
 
+## 📸 Screenshots
+
+### 1. Interactive Liquid Glass Hero
+![Interactive Liquid Glass Hero](docs/screenshots/hero.png)
+*Real-time Delhi NCR air quality atmosphere with live network PEVI widget, 6-hour trend preview, and quick explainer trigger.*
+
+### 2. Hyperlocal Green Spaces & Personalized PEVI
+![Hyperlocal Green Spaces & Personalized PEVI](docs/screenshots/location-cards.png)
+*40 Delhi NCR parks ranked by health-weighted exposure index with real-time pollutant levels, tailored risk bands, and plain-language guidance.*
+
+### 3. Diurnal Air Quality Forecast Rail
+![Diurnal Air Quality Forecast Rail](docs/screenshots/forecast.png)
+*6-hour dynamic forecast timeline highlighting optimal breathable windows for outdoor activity across the region.*
+
+### 4. Conversational Air Quality Agent ("Hawa")
+![Conversational Air Quality Agent](docs/screenshots/agent-chat.png)
+*Autonomous LLM assistant with structured health profile clarification, personalized route advice, and live environmental intelligence.*
+
+---
+
 ## Project Architecture
 
 ```text
