@@ -18,7 +18,7 @@ HawaGuide is an advanced spatial air quality monitoring and modeling platform de
 ![Diurnal Air Quality Forecast Rail](docs/screenshots/forecast.png)
 *6-hour dynamic forecast timeline highlighting optimal breathable windows for outdoor activity across the region.*
 
-### 4. Conversational Air Quality Agent ("Hawa")
+### Conversational Air Quality Agent ("Hawa")
 ![Conversational Air Quality Agent](docs/screenshots/agent-chat.png)
 *Autonomous LLM assistant with structured health profile clarification, personalized route advice, and live environmental intelligence.*
 
