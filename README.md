@@ -6,7 +6,7 @@ HawaGuide is an advanced spatial air quality monitoring and modeling platform de
 
 ---
 
-##  Screenshots
+##  In progress
 
 ### 1. Interactive Liquid Glass Hero
 ![Interactive Liquid Glass Hero](docs/screenshots/hero.png)
