@@ -852,8 +852,8 @@ def _extract_fields_via_gemini(text: str, api_key: str) -> Dict[str, Any]:
 def _extract_fields_from_text(text: str) -> Dict[str, Any]:
     """
     Public interface used by /agent/ask.
-    Calls Gemini structured-output extraction; falls back to empty dict on error
-    so the session simply asks for the missing fields rather than crashing.
+    Calls Gemini structured-output extraction; falls back to degraded mode on error or missing API key
+    so the session simply asks for the missing fields directly rather than crashing.
     """
     from dotenv import load_dotenv
     import os
@@ -862,8 +862,8 @@ def _extract_fields_from_text(text: str) -> Dict[str, Any]:
     load_dotenv(dotenv_path=_env_path)
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        logging.warning("No Gemini API key found; field extraction will return empty.")
-        return {}
+        logging.warning("No Gemini API key found; field extraction in degraded mode.")
+        return {"_extraction_degraded": True}
     try:
         return _extract_fields_via_gemini(text, api_key)
     except Exception as exc:

@@ -1,12 +1,12 @@
 """
 ===================================================================================================
-Test: Agent Degraded Mode Handling (Simulated LLM API Failure)
+Test: Agent Degraded Mode Handling (Simulated LLM API Failure & Missing Key)
 ===================================================================================================
 
-Target Failure Mode:
+Target Failure Modes:
 ---------------------
-When the Google Gemini API fails (e.g. 503 service outage, 429 quota exhaustion, or invalid network),
-the system must NOT:
+When the Google Gemini API fails (e.g. 503 service outage, 429 quota exhaustion) or when no
+GEMINI_API_KEY is configured in the environment, the system must NOT:
 - Crash with an unhandled 500 internal server error.
 - Silently guess fallback values or invent default slots.
 
@@ -19,6 +19,7 @@ Instead, the system must gracefully degrade:
 ===================================================================================================
 """
 
+import os
 import sys
 import unittest
 import uuid
@@ -40,11 +41,13 @@ class TestAgentDegradedMode(unittest.TestCase):
     def tearDown(self):
         _SESSIONS.pop(self.session_id, None)
 
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_mock_api_key_for_testing"}, clear=False)
     @patch("backend.app.main._extract_fields_via_gemini")
-    def test_gemini_failure_triggers_degraded_mode_response(self, mock_gemini):
+    def test_gemini_503_failure_triggers_degraded_mode_response(self, mock_gemini):
         """
         Simulate Gemini raising a 503 Unavailable exception.
         Confirm conversational_ask returns extraction_degraded=True and clarifying question.
+        Works in CI with no real API key required.
         """
         mock_gemini.side_effect = Exception("503 Service Unavailable: Google GenAI backend overloaded")
 
@@ -68,6 +71,25 @@ class TestAgentDegradedMode(unittest.TestCase):
         self.assertIsNone(resp.recommendation)
 
         # 5. Missing fields must list required slots
+        self.assertGreater(len(resp.missing_fields), 0)
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}, clear=False)
+    def test_missing_api_key_triggers_degraded_mode_response(self):
+        """
+        Simulate runtime environment with no GEMINI_API_KEY configured.
+        Confirm conversational_ask returns extraction_degraded=True and clarifying question.
+        """
+        req = AgentAskRequest(
+            session_id=self.session_id,
+            message="I want to go for a walk in Sanjay Van."
+        )
+
+        resp = conversational_ask(req)
+
+        self.assertTrue(resp.extraction_degraded, "Response must flag extraction_degraded=True when API key is missing")
+        self.assertEqual(resp.status, "clarifying")
+        self.assertIn("having trouble understanding free-text", resp.message)
+        self.assertIsNone(resp.recommendation)
         self.assertGreater(len(resp.missing_fields), 0)
 
 
