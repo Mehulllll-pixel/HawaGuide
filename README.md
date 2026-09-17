@@ -1,4 +1,4 @@
-# HawaGuide 💨
+# HawaGuide 🌸
 
 > **Hyperlocal Air Quality Intelligence & Personalized Exposure Vulnerability Index (PEVI) for Delhi NCR**
 
@@ -12,8 +12,8 @@ India's official AQI reports only the single worst pollutant on a given day, ign
 
 ## Visual Overview & UI Walkthrough
 
-### 1. Interactive Liquid Glass Hero
-![Interactive Liquid Glass Hero](docs/screenshots/hero.png)
+### 1. Interactive Liquid Glass Main Landing Page
+![Interactive Liquid Glass Main Landing Page](docs/screenshots/hero.png)
 *Real-time Delhi NCR air quality atmosphere with live network PEVI widget, 6-hour trend preview, and quick explainer trigger.*
 
 ### 2. Hyperlocal Green Spaces & Personalized PEVI

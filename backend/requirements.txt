@@ -8,9 +8,14 @@ pykrige>=1.7.0
 xgboost>=2.1.0
 scikit-learn>=1.5.0
 torch>=2.0.0
+joblib>=1.4.0
 fastapi>=0.115.0
 uvicorn>=0.30.0
 pydantic>=2.9.0
 prophet>=1.1.5
 sentry-sdk[fastapi]>=2.0.0
-
+google-genai>=1.0.0
+google-generativeai>=0.8.0
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+langgraph>=0.2.0
