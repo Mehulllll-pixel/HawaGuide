@@ -4,17 +4,42 @@ HawaGuide — Backend FastAPI Application & Spatial Optimization Service
 ===================================================================================================
 """
 
+import os
 import sys
+import json
+import math
+import logging
 from pathlib import Path
+from typing import Optional, List, Dict, Any
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import json
-import logging
-import math
+# Load environment variables from .env
+for candidate in [PROJECT_ROOT / "backend" / ".env", PROJECT_ROOT / ".env", Path(".env")]:
+    if candidate.is_file():
+        load_dotenv(dotenv_path=candidate)
+        break
+else:
+    load_dotenv()
+
+import sentry_sdk
+
+# ─── Sentry Error Tracking Initialization ─────────────────────────────────────
+# Automatically instruments FastAPI to capture unhandled exceptions across all endpoints.
+# Only initializes if SENTRY_DSN is provided in the environment.
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        traces_sample_rate=0.2,
+        send_default_pii=False,
+    )
+    logging.info("Sentry error tracking successfully initialized for FastAPI backend (sample_rate=0.2).")
+
 import requests as _requests
-from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -33,6 +58,7 @@ from backend.ml.optimizer import (
     DELHI_NCR_PARKS
 )
 from backend.ml.pevi import compute_pollutant_contributions
+from backend.ml.forecast_engine import ForecastEngine
 
 app = FastAPI(
     title="HawaGuide API",
@@ -196,7 +222,7 @@ def root():
         "disclaimer": MEDICAL_DISCLAIMER,
         "endpoints": {
             "GET /locations": "All 40 parks with base PEVI and 6 criteria pollutant values for map and list views",
-            "GET /forecast/{location_name}": "6-hour PM2.5 forecast trajectory using 75/25 XGBoost+LSTM ensemble",
+            "GET /forecast/{location_name}": "6-hour PM2.5 forecast trajectory using 100% XGBoost v3 direct multi-horizon models",
             "GET /history/{location_name}?days=7": "Historical PEVI and PM2.5 trend for a park over the last N days",
             "GET /optimize": "Personalized park location optimizer with multi-objective trade-off ranking",
             "POST /agent/ask": "Conversational spatial air quality advisory agent",
@@ -312,9 +338,10 @@ def get_all_locations():
 def get_location_forecast(location_name: str):
     """
     Returns the 6-hour PM2.5 hourly forecast trajectory for a specific named park
-    using the validated 75/25 XGBoost+LSTM ensemble blend.
+    using 100% XGBoost v3 direct multi-horizon models.
 
     - Returns 404 if the requested location name does not match any of the 40 Delhi NCR parks.
+    - Uses live monitoring data & weather observations to run true model inference.
     - Provides hour-by-hour projected PM2.5 (ug/m3), delta from baseline, and trend direction.
     """
     matched_park = _find_park_by_name(location_name)
@@ -326,40 +353,23 @@ def get_location_forecast(location_name: str):
 
     conn = get_db_connection()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                SELECT pm25_ugm3, pevi_value FROM pevi_scores
-                WHERE location_name = %s
-                ORDER BY timestamp DESC LIMIT 1;
-            """, (matched_park["name"],))
-            row = cur.fetchone()
+        engine = ForecastEngine.get_instance()
+        forecast_result = engine.predict_for_park(
+            conn=conn,
+            park_name=matched_park["name"],
+            park_lat=matched_park["lat"],
+            park_lon=matched_park["lon"]
+        )
 
-        if row and row["pm25_ugm3"] is not None:
-            current_pm25 = round(float(row["pm25_ugm3"]), 1)
-        else:
-            current_pm25 = 35.0
-
-        # Calculate 6-hour forecast trajectory with 75/25 XGBoost + LSTM ensemble dynamics
-        trajectory: List[HourlyForecastPoint] = []
-        for h in range(1, 7):
-            diurnal_factor = -1.2 * math.sin(h * math.pi / 6.0) + (0.5 * (h - 3))
-            pred_change = (0.75 * diurnal_factor) + (0.25 * (diurnal_factor * 0.9))
-            forecast_val = round(max(10.0, current_pm25 + pred_change * (h / 2.0)), 1)
-            delta = round(forecast_val - current_pm25, 1)
-
-            if forecast_val < current_pm25 - 2.0:
-                trend = "Improving (Decreasing PM2.5)"
-            elif forecast_val > current_pm25 + 2.0:
-                trend = "Worsening (Increasing PM2.5)"
-            else:
-                trend = "Stable"
-
-            trajectory.append(HourlyForecastPoint(
-                hour_ahead=h,
-                forecast_pm25=forecast_val,
-                delta_from_now=delta,
-                trend=trend
-            ))
+        hourly_trajectory = [
+            HourlyForecastPoint(
+                hour_ahead=pt["hour_ahead"],
+                forecast_pm25=pt["forecast_pm25"],
+                delta_from_now=pt["delta_from_now"],
+                trend=pt["trend"]
+            )
+            for pt in forecast_result["hourly_trajectory"]
+        ]
 
         return LocationForecastResponse(
             status="success",
@@ -368,10 +378,10 @@ def get_location_forecast(location_name: str):
             zone=matched_park.get("zone"),
             lat=matched_park["lat"],
             lon=matched_park["lon"],
-            current_pm25=current_pm25,
-            model_blend="75% XGBoost v3 + 25% PyTorch LSTM",
+            current_pm25=forecast_result["current_pm25"],
+            model_blend=forecast_result["model_blend"],
             forecast_horizon_hours=6,
-            hourly_trajectory=trajectory
+            hourly_trajectory=hourly_trajectory
         )
     except HTTPException:
         raise
@@ -756,17 +766,18 @@ def _extract_fields_via_gemini(text: str, api_key: str) -> Dict[str, Any]:
         except Exception as exc:
             last_exc = exc
             err_str = str(exc)
-            is_transient = (
-                "503" in err_str or "UNAVAILABLE" in err_str
-                or "overload" in err_str.lower()
-                or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
-            )
-            if is_transient:
-                # Try to honour the API's retryDelay hint (e.g. '10s')
+            is_503 = ("503" in err_str or "UNAVAILABLE" in err_str or "overload" in err_str.lower())
+            is_429 = ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str)
+            if is_503 or is_429:
+                # Fast fail if daily quota is exhausted (no point waiting 60s per attempt)
+                if "GenerateRequestsPerDayPerProjectPerModel" in err_str:
+                    sentry_sdk.capture_exception(exc)
+                    raise
+                # Try to honour the API's retryDelay hint (e.g. '3s')
                 import re as _re
                 m = _re.search(r"retry.*?(\d+(?:\.\d+)?)s", err_str, _re.IGNORECASE)
                 wait = float(m.group(1)) if m else 2 ** (attempt + 1)
-                wait = max(1.0, min(wait, 15))  # clamp: at least 1s, at most 15s
+                wait = max(1.0, min(wait, 3.0))  # clamp to max 3s
                 logging.warning(
                     "Gemini transient error (attempt %d/3); retrying in %.1fs: %s",
                     attempt + 1, wait, exc
@@ -775,15 +786,20 @@ def _extract_fields_via_gemini(text: str, api_key: str) -> Dict[str, Any]:
                 continue
             raise  # non-transient errors are not retried
     else:
+        sentry_sdk.capture_exception(last_exc)
         raise last_exc  # all retries exhausted
 
     # Parse the JSON (Gemini guarantees schema compliance when response_schema is set)
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as jde:
         # Strip markdown fences if present
-        raw_clean = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        parsed = json.loads(raw_clean)
+        try:
+            raw_clean = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            parsed = json.loads(raw_clean)
+        except Exception as parse_err:
+            sentry_sdk.capture_exception(parse_err)
+            raise
 
     extracted: Dict[str, Any] = {}
 
@@ -852,6 +868,7 @@ def _extract_fields_from_text(text: str) -> Dict[str, Any]:
         return _extract_fields_via_gemini(text, api_key)
     except Exception as exc:
         logging.warning("Gemini field extraction failed: %s", exc)
+        sentry_sdk.capture_exception(exc)
         return {"_extraction_degraded": True}
 
 

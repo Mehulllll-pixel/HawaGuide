@@ -408,6 +408,11 @@ Provide a concise 2-sentence rationale synthesizing this analysis following the 
             }
         except Exception as e:
             logging.warning(f"Gemini API invocation fallback: {e}")
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
             if tier == "TIER_1":
                 rationale_text = f"Conditions at {best_park_name} are currently favorable for your profile."
             elif tier == "TIER_2":
