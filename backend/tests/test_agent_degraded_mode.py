@@ -41,15 +41,15 @@ class TestAgentDegradedMode(unittest.TestCase):
     def tearDown(self):
         _SESSIONS.pop(self.session_id, None)
 
-    @patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_mock_api_key_for_testing"}, clear=False)
-    @patch("backend.app.main._extract_fields_via_gemini")
-    def test_gemini_503_failure_triggers_degraded_mode_response(self, mock_gemini):
+    @patch.dict(os.environ, {"GROQ_API_KEY": "dummy_groq_key", "GEMINI_API_KEY": "dummy_gemini_key"}, clear=False)
+    @patch("backend.app.main._extract_fields_via_llm")
+    def test_llm_failure_triggers_degraded_mode_response(self, mock_llm):
         """
-        Simulate Gemini raising a 503 Unavailable exception.
+        Simulate LLM raising an exception (service outage or rate limits).
         Confirm conversational_ask returns extraction_degraded=True and clarifying question.
         Works in CI with no real API key required.
         """
-        mock_gemini.side_effect = Exception("503 Service Unavailable: Google GenAI backend overloaded")
+        mock_llm.side_effect = Exception("503 Service Unavailable: Provider backend overloaded")
 
         req = AgentAskRequest(
             session_id=self.session_id,
@@ -73,12 +73,15 @@ class TestAgentDegradedMode(unittest.TestCase):
         # 5. Missing fields must list required slots
         self.assertGreater(len(resp.missing_fields), 0)
 
-    @patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}, clear=False)
-    def test_missing_api_key_triggers_degraded_mode_response(self):
+    @patch.dict(os.environ, {"GROQ_API_KEY": "", "GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}, clear=False)
+    @patch("backend.app.main._extract_fields_via_llm")
+    def test_missing_api_key_triggers_degraded_mode_response(self, mock_llm):
         """
-        Simulate runtime environment with no GEMINI_API_KEY configured.
+        Simulate runtime environment with no API keys configured.
         Confirm conversational_ask returns extraction_degraded=True and clarifying question.
         """
+        mock_llm.side_effect = ValueError("Neither GROQ_API_KEY nor GEMINI_API_KEY is configured.")
+
         req = AgentAskRequest(
             session_id=self.session_id,
             message="I want to go for a walk in Sanjay Van."

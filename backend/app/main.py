@@ -83,14 +83,23 @@ def _find_park_by_name(location_name: str) -> Optional[Dict[str, Any]]:
     Locates a park from the 40 known Delhi NCR parks via exact or fuzzy case-insensitive matching.
     """
     clean = location_name.strip().lower().replace("-", " ")
+    if not clean or clean in ("no", "none", "neither", "yes", "true", "false", "rest", "walk", "moderate", "run", "in", "at", "to", "go", "is", "it", "safe", "outside"):
+        return None
     for p in DELHI_NCR_PARKS:
         p_clean = p["name"].strip().lower().replace("-", " ")
         if clean == p_clean:
             return p
+    # Check if a park name is mentioned in the user sentence (e.g. "Lodhi Garden" in sentence)
     for p in DELHI_NCR_PARKS:
         p_clean = p["name"].strip().lower().replace("-", " ")
-        if clean in p_clean or p_clean in clean:
+        if len(p_clean) >= 4 and p_clean in clean:
             return p
+    # Or if clean is a specific search query (>= 4 chars) contained within park name
+    if len(clean) >= 4:
+        for p in DELHI_NCR_PARKS:
+            p_clean = p["name"].strip().lower().replace("-", " ")
+            if clean in p_clean:
+                return p
     return None
 
 
@@ -611,6 +620,69 @@ _SESSIONS: Dict[str, Dict[str, Any]] = {}
 _REQUIRED_FIELDS = ["lat", "lon", "age_group", "conditions",
                     "smoker", "planned_activity", "duration_hours"]
 
+_FIELD_ORDER = [
+    "age_group",
+    "conditions",
+    "smoker",
+    "planned_activity",
+    "duration_hours",
+    "location"
+]
+
+_FIELD_QUESTIONS = {
+    "age_group": "What's your age? (Under 18 = child, 18-64 = adult, 65+ = elderly)",
+    "conditions": "Do you have any of these health conditions: asthma, cardiac, or none?",
+    "smoker": "Do you smoke tobacco?",
+    "planned_activity": "What activity level are you planning: rest, moderate, or vigorous?",
+    "duration_hours": "How long do you plan to be outside?",
+    "location": "Where are you located in Delhi NCR?"
+}
+
+_FIELD_REASKS = {
+    "age_group": "I didn't quite catch that — please provide your age as a number (e.g. 34) or category (child, adult, elderly):",
+    "conditions": "I didn't quite catch that — please let me know if you have asthma, cardiac condition, or none:",
+    "smoker": "I didn't quite catch that — please answer yes or no: do you smoke tobacco?",
+    "planned_activity": "I didn't quite catch that — please choose your activity level: rest, moderate, or vigorous:",
+    "duration_hours": "I didn't quite catch that — please specify how long you'll be outside (e.g. 30 minutes, 1 hour):",
+    "location": "I couldn't find that location in Delhi NCR. Please specify a nearby Delhi NCR neighborhood or park name:"
+}
+
+AGE_BRACKET_LABELS = {
+    "child": "child (under 18)",
+    "adult": "adult (18-64)",
+    "elderly": "elderly (65+)",
+}
+
+
+def map_age_to_group(val: Any) -> Optional[str]:
+    """Maps a numeric age or category string into 'child', 'adult', or 'elderly'."""
+    if isinstance(val, (int, float)):
+        if val < 18:
+            return "child"
+        elif 18 <= val <= 64:
+            return "adult"
+        else:
+            return "elderly"
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("child", "kid", "kids", "toddler", "teen", "teenager", "baby", "young"):
+            return "child"
+        if v in ("adult", "grown-up", "grownup"):
+            return "adult"
+        if v in ("elderly", "senior", "seniors", "senior citizen", "old", "60+", "65+", "aged", "retiree"):
+            return "elderly"
+        import re
+        m = re.search(r"\b(\d{1,3})\b", v)
+        if m:
+            num = int(m.group(1))
+            if num < 18:
+                return "child"
+            elif 18 <= num <= 64:
+                return "adult"
+            else:
+                return "elderly"
+    return None
+
 
 # ─── Nominatim Geocoder ──────────────────────────────────────────────────────────────
 def geocode_location(place_name: str) -> Optional[Dict[str, Any]]:
@@ -650,9 +722,8 @@ def geocode_location(place_name: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-# ─── Gemini Structured-Output Field Extractor ────────────────────────────────────────────
-# JSON schema for Gemini response_schema (all fields nullable so the model
-# can return null for anything not clearly stated).
+# ─── Structured-Output Field Extractor (Groq primary / Gemini fallback) ─────────
+
 _EXTRACTION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -660,7 +731,7 @@ _EXTRACTION_SCHEMA = {
             "type": "string",
             "enum": ["adult", "child", "elderly"],
             "nullable": True,
-            "description": "Age group of the person going outside. null if not clearly stated."
+            "description": "Age group of the person going outside: 'adult' (18-64), 'child' (under 18), 'elderly' (65+). null if not clearly stated."
         },
         "conditions": {
             "type": "array",
@@ -680,7 +751,7 @@ _EXTRACTION_SCHEMA = {
             "type": "string",
             "enum": ["rest", "moderate", "vigorous"],
             "nullable": True,
-            "description": "Planned physical activity level. null if not stated."
+            "description": "Planned physical activity level: 'rest' (sedentary, sitting, resting, not moving), 'moderate' (walking, strolling, cycling, light exercise), 'vigorous' (running, jogging, intense sports). null if not stated."
         },
         "duration_hours": {
             "type": "number",
@@ -697,6 +768,51 @@ _EXTRACTION_SCHEMA = {
         }
     },
     "required": ["age_group", "conditions", "smoker", "planned_activity", "duration_hours", "location"]
+}
+
+_GROQ_EXTRACTION_SCHEMA = {
+    "name": "field_extraction",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "age_group": {
+                "type": ["string", "null"],
+                "enum": ["adult", "child", "elderly", None],
+                "description": "Age group of the person going outside: 'adult' (18-64), 'child' (under 18), 'elderly' (65+). null if not clearly stated."
+            },
+            "conditions": {
+                "type": ["array", "null"],
+                "items": {"type": "string"},
+                "description": (
+                    "List of health conditions. Valid values: 'asthma', 'copd', 'cardiac', 'respiratory'. "
+                    "Use [] for explicitly healthy/no conditions. null if not mentioned at all."
+                )
+            },
+            "smoker": {
+                "type": ["boolean", "null"],
+                "description": "True if the person smokes tobacco. null if not mentioned."
+            },
+            "planned_activity": {
+                "type": ["string", "null"],
+                "enum": ["rest", "moderate", "vigorous", None],
+                "description": "Planned physical activity level: 'rest' (sedentary, sitting, resting, not moving), 'moderate' (walking, strolling, cycling, light exercise), 'vigorous' (running, jogging, intense sports). null if not stated."
+            },
+            "duration_hours": {
+                "type": ["number", "null"],
+                "description": "Planned outdoor duration in hours (e.g. 1.5). null if not stated."
+            },
+            "location": {
+                "type": ["string", "null"],
+                "description": (
+                    "Place name exactly as mentioned (e.g. 'Connaught Place', 'Hauz Khas Village'). "
+                    "null if no location is mentioned."
+                )
+            }
+        },
+        "required": ["age_group", "conditions", "smoker", "planned_activity", "duration_hours", "location"],
+        "additionalProperties": False
+    }
 }
 
 _EXTRACTION_SYSTEM = (
@@ -717,100 +833,35 @@ _EXTRACTION_SYSTEM = (
     "Never return a free-text condition description; always map to one of the four valid values. "
     "(5) For age_group: 'getting on in years', 'elderly mother', 'senior', 'old', '60+' etc. => 'elderly'; "
     "'kid', 'child', 'daughter/son who is young' => 'child'; "
+    "if a numeric age is given: under 18 => 'child'; 18-64 => 'adult'; 65+ => 'elderly'; "
     "if only 'I' is used with no age cue, do NOT assume adult — return null. "
-    "(6) For planned_activity: walking / cycling / moderate exercise = 'moderate'; "
-    "running / jogging / intense = 'vigorous'; sitting / strolling / resting = 'rest'; "
+    "(6) For planned_activity: "
+    "  - rest = sedentary, sitting, resting, lying down, not moving; "
+    "  - moderate = walking, strolling, light activity, cycling, moderate exercise; "
+    "  - vigorous = running, jogging, intense sports, heavy workout; "
     "'go outside' alone does not imply any activity — return null."
 )
 
 
-def _extract_fields_via_gemini(text: str, api_key: str) -> Dict[str, Any]:
-    """
-    Uses Gemini with response_schema (structured output / JSON mode) to extract
-    agent input fields from free-text.  Uses the google-genai SDK (v2+) with
-    gemini-3.6-flash and GenerateContentConfig.response_schema for strict JSON.
-    Returns a dict with only the non-null fields resolved to their final values
-    (location is geocoded to lat/lon here).
-    Raises on unrecoverable API errors so the caller can surface them.
-    """
-    import time
-    from google import genai
-    from google.genai import types as genai_types
-
-    client = genai.Client(api_key=api_key)
-
-    # Build the full prompt: system instructions prepended to the user message
-    full_prompt = (
-        f"{_EXTRACTION_SYSTEM}\n\n"
-        f"User message: \"{text}\"\n\n"
-        "Extract the fields as instructed. Return ONLY valid JSON matching the schema. "
-        "Use null for any field not clearly stated."
-    )
-
-    # Retry up to 3 times on 503 overload or 429 quota (transient API pressure)
-    last_exc = None
-    raw = None
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=full_prompt,
-                config=genai_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=_EXTRACTION_SCHEMA,
-                    temperature=0.0,   # deterministic slot-filling
-                )
-            )
-            raw = response.text.strip()
-            break  # success
-        except Exception as exc:
-            last_exc = exc
-            err_str = str(exc)
-            is_503 = ("503" in err_str or "UNAVAILABLE" in err_str or "overload" in err_str.lower())
-            is_429 = ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str)
-            if is_503 or is_429:
-                # Fast fail if daily quota is exhausted (no point waiting 60s per attempt)
-                if "GenerateRequestsPerDayPerProjectPerModel" in err_str:
-                    sentry_sdk.capture_exception(exc)
-                    raise
-                # Try to honour the API's retryDelay hint (e.g. '3s')
-                import re as _re
-                m = _re.search(r"retry.*?(\d+(?:\.\d+)?)s", err_str, _re.IGNORECASE)
-                wait = float(m.group(1)) if m else 2 ** (attempt + 1)
-                wait = max(1.0, min(wait, 3.0))  # clamp to max 3s
-                logging.warning(
-                    "Gemini transient error (attempt %d/3); retrying in %.1fs: %s",
-                    attempt + 1, wait, exc
-                )
-                time.sleep(wait)
-                continue
-            raise  # non-transient errors are not retried
-    else:
-        sentry_sdk.capture_exception(last_exc)
-        raise last_exc  # all retries exhausted
-
-    # Parse the JSON (Gemini guarantees schema compliance when response_schema is set)
+def _process_raw_extracted_json(raw: str) -> Dict[str, Any]:
+    """Parse raw JSON string from LLM extraction and map to canonical state dict."""
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError as jde:
-        # Strip markdown fences if present
-        try:
-            raw_clean = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            parsed = json.loads(raw_clean)
-        except Exception as parse_err:
-            sentry_sdk.capture_exception(parse_err)
-            raise
+    except json.JSONDecodeError:
+        raw_clean = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        parsed = json.loads(raw_clean)
 
     extracted: Dict[str, Any] = {}
 
     # ─ age_group ────────────────────────────────────────────────────────────
     age = parsed.get("age_group")
-    if age in ("adult", "child", "elderly"):
-        extracted["age_group"] = age
+    mapped_age = map_age_to_group(age)
+    if mapped_age:
+        extracted["age_group"] = mapped_age
 
     # ─ conditions ────────────────────────────────────────────────────────
     conds = parsed.get("conditions")
-    if conds is not None:  # None = not mentioned; [] = explicitly healthy
+    if conds is not None:
         valid = {"asthma", "copd", "cardiac", "respiratory"}
         extracted["conditions"] = [c for c in conds if c in valid]
 
@@ -832,19 +883,271 @@ def _extract_fields_via_gemini(text: str, api_key: str) -> Dict[str, Any]:
         except (ValueError, TypeError):
             pass
 
-    # ─ location (geocode via Nominatim) ────────────────────────────────────
+    # ─ location (geocode via Nominatim / park matcher) ───────────────────────
     loc = parsed.get("location")
     if loc:
-        geo = geocode_location(loc)
-        if geo:
-            extracted["lat"] = geo["lat"]
-            extracted["lon"] = geo["lon"]
-            extracted["_location_name"] = geo["display_name"].split(",")[0].strip()
-            extracted["_location_display"] = geo["display_name"]
+        matched_park = _find_park_by_name(loc)
+        if matched_park:
+            extracted["lat"] = matched_park["lat"]
+            extracted["lon"] = matched_park["lon"]
+            extracted["_location_name"] = matched_park["name"]
+            extracted["_location_display"] = matched_park["name"]
         else:
-            # Gemini found a location name but geocoding failed — store the raw
-            # name so the caller can surface a more helpful error if needed.
-            extracted["_location_unresolved"] = loc
+            geo = geocode_location(loc)
+            if geo:
+                extracted["lat"] = geo["lat"]
+                extracted["lon"] = geo["lon"]
+                extracted["_location_name"] = geo["display_name"].split(",")[0].strip()
+                extracted["_location_display"] = geo["display_name"]
+            else:
+                extracted["_location_unresolved"] = loc
+
+    return extracted
+
+
+def _extract_fields_via_groq(text: str, api_key: str, model: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Uses Groq chat completions API with structured output / json_schema to extract
+    agent input fields from free-text using openai/gpt-oss-120b.
+    """
+    import time
+    from groq import Groq
+
+    client = Groq(api_key=api_key)
+    target_model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+    messages = [
+        {"role": "system", "content": _EXTRACTION_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f'User message: "{text}"\n\n'
+                "Extract the fields as instructed. Return ONLY valid JSON matching the schema. "
+                "Use null for any field not clearly stated."
+            )
+        }
+    ]
+
+    last_exc = None
+    raw = None
+    for attempt in range(3):
+        try:
+            try:
+                response = client.chat.completions.create(
+                    model=target_model,
+                    messages=messages,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": _GROQ_EXTRACTION_SCHEMA
+                    },
+                    temperature=0.0
+                )
+            except Exception as schema_err:
+                logging.warning("Groq json_schema failed (%s), falling back to json_object format", schema_err)
+                response = client.chat.completions.create(
+                    model=target_model,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.0
+                )
+            raw = response.choices[0].message.content.strip()
+            break
+        except Exception as exc:
+            last_exc = exc
+            err_str = str(exc)
+            is_rate_limit = ("429" in err_str or "rate_limit" in err_str.lower())
+            is_overload = ("503" in err_str or "overloaded" in err_str.lower() or "500" in err_str)
+            if is_rate_limit or is_overload:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            sentry_sdk.capture_exception(exc)
+            raise exc
+    else:
+        sentry_sdk.capture_exception(last_exc)
+        raise last_exc
+
+    return _process_raw_extracted_json(raw)
+
+
+def _extract_fields_via_gemini(text: str, api_key: str) -> Dict[str, Any]:
+    """
+    Uses Gemini with response_schema (structured output / JSON mode) to extract
+    agent input fields from free-text (maintained for fallback / compatibility).
+    """
+    import time
+    from google import genai
+    from google.genai import types as genai_types
+
+    client = genai.Client(api_key=api_key)
+
+    full_prompt = (
+        f"{_EXTRACTION_SYSTEM}\n\n"
+        f"User message: \"{text}\"\n\n"
+        "Extract the fields as instructed. Return ONLY valid JSON matching the schema. "
+        "Use null for any field not clearly stated."
+    )
+
+    last_exc = None
+    raw = None
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=full_prompt,
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=_EXTRACTION_SCHEMA,
+                    temperature=0.0,
+                )
+            )
+            raw = response.text.strip()
+            break
+        except Exception as exc:
+            last_exc = exc
+            err_str = str(exc)
+            is_503 = ("503" in err_str or "UNAVAILABLE" in err_str or "overload" in err_str.lower())
+            is_429 = ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str)
+            if is_503 or is_429:
+                if "GenerateRequestsPerDayPerProjectPerModel" in err_str:
+                    sentry_sdk.capture_exception(exc)
+                    raise
+                import re as _re
+                m = _re.search(r"retry.*?(\d+(?:\.\d+)?)s", err_str, _re.IGNORECASE)
+                wait = float(m.group(1)) if m else 2 ** (attempt + 1)
+                if is_429 and wait > 3.0:
+                    sentry_sdk.capture_exception(exc)
+                    raise
+                wait = max(1.0, min(wait, 3.0))
+                logging.warning(
+                    "Gemini transient error (attempt %d/3); retrying in %.1fs: %s",
+                    attempt + 1, wait, exc
+                )
+                time.sleep(wait)
+                continue
+            raise
+    else:
+        sentry_sdk.capture_exception(last_exc)
+        raise last_exc
+
+    return _process_raw_extracted_json(raw)
+
+
+def _extract_fields_via_llm(text: str) -> Dict[str, Any]:
+    """
+    Provider-neutral LLM extraction: prioritizes Groq (GROQ_API_KEY),
+    falling back to Gemini (GEMINI_API_KEY / GOOGLE_API_KEY).
+    """
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(dotenv_path=_env_path)
+
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key and groq_key.strip() and not groq_key.startswith("your_"):
+        try:
+            return _extract_fields_via_groq(text, groq_key)
+        except Exception as exc:
+            logging.warning("Groq extraction failed, checking fallback: %s", exc)
+            sentry_sdk.capture_exception(exc)
+            gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            if gemini_key and not gemini_key.startswith("your_"):
+                return _extract_fields_via_gemini(text, gemini_key)
+            raise
+
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if gemini_key and not gemini_key.startswith("your_"):
+        return _extract_fields_via_gemini(text, gemini_key)
+
+    raise ValueError("Neither GROQ_API_KEY nor GEMINI_API_KEY is configured.")
+
+
+
+def _parse_direct_fields(text: str) -> Dict[str, Any]:
+    """
+    Deterministic rule-based extractor for direct short responses, numbers, button clicks, and common phrases.
+    Runs prior to / alongside LLM extraction.
+    """
+    import re
+    clean = text.strip()
+    lower = clean.lower()
+    extracted: Dict[str, Any] = {}
+
+    # 1. Direct Age Parsing
+    # Check standalone number, "I am X", "X-year-old", "X years old", "X yo"
+    age_match = re.search(r"\b(\d{1,3})\s*(?:-|\s)?(?:years?\s*old|yo|yrs?|yr)\b", lower)
+    if not age_match:
+        age_match = re.search(r"^(?:i am\s+|i'm\s+|age\s+)?(\d{1,3})$", lower)
+    if age_match:
+        num = int(age_match.group(1))
+        if 0 < num <= 120:
+            extracted["age_group"] = map_age_to_group(num)
+    else:
+        # Check standalone or in-sentence category words
+        if re.search(r"\b(child|kid|kids|toddler|teen|teenager)\b", lower):
+            extracted["age_group"] = "child"
+        elif re.search(r"\b(adult|grown-?up)\b", lower):
+            extracted["age_group"] = "adult"
+        elif re.search(r"\b(elderly|senior|seniors|senior\s*citizen|old|60\+|65\+|retiree)\b", lower):
+            extracted["age_group"] = "elderly"
+
+    # 2. Direct Conditions Parsing
+    if re.search(r"\b(no\s+(?:health\s+|medical\s+)?(?:conditions|issues|problems)|healthy|nothing|no\s+conditions)\b", lower) or lower in ("none", "no", "neither", "nil", "na", "n/a", "clean", "none of these"):
+        extracted["conditions"] = []
+    else:
+        cond_list = []
+        if re.search(r"\b(asthma|asthmatic)\b", lower):
+            cond_list.append("asthma")
+        if re.search(r"\b(cardiac|heart|heart\s+condition|cardiovascular)\b", lower):
+            cond_list.append("cardiac")
+        if re.search(r"\b(copd|emphysema|bronchitis)\b", lower):
+            cond_list.append("copd")
+        if re.search(r"\b(respiratory|breathing\s+trouble|breathlessness|lung\s+issues)\b", lower):
+            cond_list.append("respiratory")
+        if cond_list:
+            extracted["conditions"] = cond_list
+
+    # 3. Direct Smoker Parsing
+    if re.search(r"\b(non-?smoker|nonsmoker|non\s+smoker|never|don't\s+smoke|do\s+not\s+smoke|no\s+smoker|not\s+a\s+smoker)\b", lower) or lower in ("no", "false"):
+        extracted["smoker"] = False
+    elif re.search(r"\b(smoker|i\s+smoke)\b", lower) or lower in ("yes", "true", "smoke", "yeah", "yep", "i do"):
+        extracted["smoker"] = True
+
+    # 4. Direct Activity Level Parsing
+    if re.search(r"\b(vigorous|run|running|jog|jogging|intense|intense\s+sports|workout|heavy\s+exercise|soccer|football)\b", lower):
+        extracted["planned_activity"] = "vigorous"
+    elif re.search(r"\b(moderate|walk|walking|stroll|strolling|brisk\s+walk|cycling|cycle|bike|biking|light\s+exercise|light\s+activity)\b", lower):
+        extracted["planned_activity"] = "moderate"
+    elif re.search(r"\b(rest|resting|sit|sitting|sedentary|not\s+moving|lying\s+down|relaxing)\b", lower):
+        extracted["planned_activity"] = "rest"
+
+    # 5. Direct Duration Parsing
+    if re.search(r"\b(?:an|one|1)\s+hour\b", lower) or lower in ("1hr", "1 hr", "1h", "1.0 hour"):
+        extracted["duration_hours"] = 1.0
+    elif re.search(r"\b(?:half\s+an?\s+hour|half\s+hour|30\s+mins?|30\s+minutes?)\b", lower) or lower in ("30min", "30 min", "30m", "0.5 hour", "0.5h"):
+        extracted["duration_hours"] = 0.5
+    elif re.search(r"\b45\s+mins?(?:utes?)?\b", lower) or lower in ("45m", "0.75 hour"):
+        extracted["duration_hours"] = 0.75
+    elif re.search(r"\b15\s+mins?(?:utes?)?\b", lower) or lower in ("15m", "0.25 hour"):
+        extracted["duration_hours"] = 0.25
+    elif re.search(r"\b2\s+hours?\b", lower) or lower in ("2 hrs", "2 hr", "2h", "two hours", "2.0 hours"):
+        extracted["duration_hours"] = 2.0
+    elif re.search(r"\b1\.5\s+hours?\b", lower) or lower in ("1.5 hrs", "1.5h", "90 minutes", "90 mins"):
+        extracted["duration_hours"] = 1.5
+    else:
+        dur_hr_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b", lower)
+        if dur_hr_match:
+            extracted["duration_hours"] = float(dur_hr_match.group(1))
+        else:
+            dur_min_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:minutes?|mins?|m)\b", lower)
+            if dur_min_match:
+                extracted["duration_hours"] = round(float(dur_min_match.group(1)) / 60.0, 3)
+
+    # 6. Direct Location Check against known parks
+    park = _find_park_by_name(clean)
+    if park:
+        extracted["lat"] = park["lat"]
+        extracted["lon"] = park["lon"]
+        extracted["_location_name"] = park["name"]
+        extracted["_location_display"] = park["name"]
 
     return extracted
 
@@ -852,69 +1155,71 @@ def _extract_fields_via_gemini(text: str, api_key: str) -> Dict[str, Any]:
 def _extract_fields_from_text(text: str) -> Dict[str, Any]:
     """
     Public interface used by /agent/ask.
-    Calls Gemini structured-output extraction; falls back to degraded mode on error or missing API key
-    so the session simply asks for the missing fields directly rather than crashing.
+    Calls direct parsing and Gemini structured-output extraction.
+    For short answers (e.g. single button clicks, numbers, park names), uses direct parsing immediately.
+    Falls back to degraded mode on error or missing API key.
     """
+    direct = _parse_direct_fields(text)
+    words = text.strip().split()
+
+    # If direct parser successfully resolved fields and it's a short reply (<= 4 words),
+    # return direct results immediately to avoid consuming LLM quota and minimize latency.
+    if direct and len(words) <= 4:
+        return direct
+
     from dotenv import load_dotenv
     import os
-    # Load .env relative to this file
+    from dotenv import load_dotenv
     _env_path = Path(__file__).resolve().parent.parent / ".env"
     load_dotenv(dotenv_path=_env_path)
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        logging.warning("No Gemini API key found; field extraction in degraded mode.")
-        return {"_extraction_degraded": True}
+    
+    llm_extracted = {}
+    is_degraded = False
     try:
-        return _extract_fields_via_gemini(text, api_key)
+        llm_extracted = _extract_fields_via_llm(text)
     except Exception as exc:
-        logging.warning("Gemini field extraction failed: %s", exc)
+        logging.warning("LLM field extraction failed: %s", exc)
         sentry_sdk.capture_exception(exc)
-        return {"_extraction_degraded": True}
+        is_degraded = True
+
+    combined = {**llm_extracted, **direct}
+    if is_degraded:
+        combined["_extraction_degraded"] = True
+    return combined
 
 
 def _missing_fields(state: Dict[str, Any]) -> List[str]:
-    """Return list of required field labels that are not yet present in the partial state."""
+    """Return list of required canonical field keys in fixed sequential order that are missing."""
     missing = []
+    if state.get("age_group") not in ("adult", "child", "elderly"):
+        missing.append("age_group")
+    if "conditions" not in state or not isinstance(state.get("conditions"), list):
+        missing.append("conditions")
+    if "smoker" not in state or not isinstance(state.get("smoker"), bool):
+        missing.append("smoker")
+    if state.get("planned_activity") not in ("rest", "moderate", "vigorous"):
+        missing.append("planned_activity")
+    if "duration_hours" not in state or not isinstance(state.get("duration_hours"), (int, float)) or state.get("duration_hours") <= 0:
+        missing.append("duration_hours")
     if "lat" not in state or "lon" not in state:
         missing.append("location")
-    if "age_group" not in state:
-        missing.append("age group (adult / child / elderly)")
-    if "conditions" not in state:
-        missing.append("any health conditions (e.g. asthma, cardiac) or 'none'")
-    if "smoker" not in state:
-        missing.append("whether you smoke (yes / no)")
-    if "planned_activity" not in state:
-        missing.append("planned activity level (rest / moderate / vigorous)")
-    if "duration_hours" not in state:
-        missing.append("how long you plan to be outside (e.g. 1 hour, 1.5 hours)")
     return missing
 
 
 def _build_clarification_question(missing: List[str], degraded: bool = False) -> str:
     """
-    Build a clarifying question for the missing fields.
-    When degraded=True, honestly surfaces that free-text understanding failed
-    so the user knows the system didn't quietly misunderstand them.
+    Build a single targeted clarifying question for the next missing field in order.
     """
-    if len(missing) == 1:
-        field = missing[0]
-        if degraded:
-            return (
-                "I'm having trouble understanding free-text right now, "
-                f"so please share this detail directly: {field}."
-            )
-        return f"To give you a personalised recommendation, could you also share your {field}?"
-
-    items = ", ".join(missing[:-1]) + f", and {missing[-1]}"
+    if not missing:
+        return ""
+    next_field = missing[0]
+    base_q = _FIELD_QUESTIONS.get(next_field, f"Could you provide your {next_field}?")
     if degraded:
         return (
-            "I'm having trouble understanding free-text right now, so please share "
-            f"each detail separately: {items}."
+            f"I'm having trouble understanding free-text right now, "
+            f"so please answer this detail directly: {base_q}"
         )
-    return (
-        "To give you a personalised recommendation, I still need a few details: "
-        f"{items}."
-    )
+    return base_q
 
 
 class AgentRecommendRequest(BaseModel):
@@ -1018,14 +1323,16 @@ class AgentAskResponse(BaseModel):
 @app.post("/agent/ask", response_model=AgentAskResponse, tags=["Agent"])
 def conversational_ask(req: AgentAskRequest):
     """
-    Conversational Agent Endpoint with Session Memory:
-    ---------------------------------------------------
+    Conversational Agent Endpoint with Sequential Clarification Flow:
+    -----------------------------------------------------------------
     1. Retrieves (or creates) partial state for the given session_id.
-    2. Extracts any newly-provided fields from the user's free-text message.
-    3. Merges newly-extracted fields into the stored partial state.
-    4. If required fields are still missing, returns a targeted clarifying question.
-    5. Once all required fields are present, runs the full LangGraph agent workflow
-       and returns the recommendation — without re-asking for fields already known.
+    2. Extracts newly-provided fields from user free-text / direct answers.
+    3. Merges newly-extracted fields into stored partial state.
+    4. Evaluates whether previous sequential question received an unparseable invalid answer (re-asks if so).
+    5. If required fields are still missing, asks ONE field at a time in fixed order:
+       age_group -> conditions -> smoker -> planned_activity -> duration_hours -> location.
+    6. Confirms mapped age bracket before asking the next question.
+    7. Once all required fields are present, runs full LangGraph agent workflow.
     """
     session_id = req.session_id
     user_text = req.message
@@ -1033,13 +1340,42 @@ def conversational_ask(req: AgentAskRequest):
 
     # Step 1: Load (or initialise) session partial state
     session_state = _SESSIONS.get(session_id, {})
+    last_asked_field = session_state.get("_last_asked_field")
 
     # Step 2: Extract fields from the new message
     newly_extracted = _extract_fields_from_text(user_text)
 
-    # Pull out the degradation flag BEFORE merging into session state —
-    # it is per-turn metadata, not part of the user's profile.
+    # Pull out degradation flag
     extraction_degraded = bool(newly_extracted.pop("_extraction_degraded", False))
+
+    # Contextual duration fallback: standalone number when duration was explicitly asked
+    if last_asked_field == "duration_hours" and "duration_hours" not in newly_extracted:
+        try:
+            val = float(user_text.strip())
+            if 0.1 <= val <= 24.0:
+                newly_extracted["duration_hours"] = val
+        except ValueError:
+            pass
+
+    # Contextual location fallback: geocode place name if location was explicitly asked
+    if last_asked_field == "location" and "lat" not in newly_extracted and "lon" not in newly_extracted:
+        # Check local park matcher first
+        matched_park = _find_park_by_name(user_text.strip())
+        if matched_park:
+            newly_extracted["lat"] = matched_park["lat"]
+            newly_extracted["lon"] = matched_park["lon"]
+            newly_extracted["_location_name"] = matched_park["name"]
+            newly_extracted["_location_display"] = matched_park["name"]
+        else:
+            geo = geocode_location(user_text.strip())
+            if geo:
+                newly_extracted["lat"] = geo["lat"]
+                newly_extracted["lon"] = geo["lon"]
+                newly_extracted["_location_name"] = geo["display_name"].split(",")[0].strip()
+                newly_extracted["_location_display"] = geo["display_name"]
+
+    # Track if age was newly provided in this turn
+    age_newly_set = ("age_group" in newly_extracted and "age_group" not in session_state)
 
     # Step 3: Merge — newly-extracted fields OVERWRITE stale values
     for key, val in newly_extracted.items():
@@ -1049,24 +1385,46 @@ def conversational_ask(req: AgentAskRequest):
     if req.alpha != 0.5 or "alpha" not in session_state:
         session_state["alpha"] = req.alpha
 
-    # Step 4: Persist updated state
-    _SESSIONS[session_id] = session_state
+    # Step 4: Check if previous sequential question received an unparseable / invalid answer
+    is_invalid_answer = False
+    if last_asked_field and last_asked_field in _missing_fields(session_state):
+        is_invalid_answer = True
 
-    # Step 5: Check for missing required fields
+    # Step 5: Check for missing required fields in fixed sequential order
     missing = _missing_fields(session_state)
     if missing:
-        question = _build_clarification_question(missing, degraded=extraction_degraded)
+        next_field = missing[0]
+        session_state["_last_asked_field"] = next_field
+        _SESSIONS[session_id] = session_state
+
+        if is_invalid_answer:
+            question_text = _FIELD_REASKS.get(next_field, _FIELD_QUESTIONS[next_field])
+            if extraction_degraded:
+                question_text = f"I'm having trouble understanding free-text right now. {question_text}"
+        else:
+            base_q = _FIELD_QUESTIONS.get(next_field, f"Could you share your {next_field}?")
+            prefix = ""
+            if extraction_degraded:
+                prefix += "I'm having trouble understanding free-text right now, so please answer this detail directly: "
+            if age_newly_set:
+                age_grp = session_state.get("age_group", "adult")
+                bracket_label = AGE_BRACKET_LABELS.get(age_grp, f"{age_grp} (18-64)")
+                prefix += f"Got it, categorizing you as {bracket_label}. "
+            
+            question_text = f"{prefix}{base_q}".strip()
+
         return AgentAskResponse(
             session_id=session_id,
             status="clarifying",
-            message=question,
+            message=question_text,
             missing_fields=missing,
             extraction_degraded=extraction_degraded,
             recommendation=None,
             disclaimer=disclaimer
         )
 
-    # Step 6: All fields present — run the full agent workflow
+    # Step 6: All fields present — persist and run the full agent workflow
+    _SESSIONS[session_id] = session_state
     try:
         result = run_agent_recommendation(
             lat=float(session_state["lat"]),
@@ -1078,9 +1436,7 @@ def conversational_ask(req: AgentAskRequest):
             duration_hours=float(session_state.get("duration_hours", 1.0)),
             alpha=float(session_state.get("alpha", 0.5))
         )
-        # Clear session after a successful recommendation so a fresh conversation
-        # can begin naturally if the user sends another message with the same session_id.
-        # To retain context for follow-ups, comment out the next line.
+        # Clear session after successful recommendation
         _SESSIONS.pop(session_id, None)
 
         return AgentAskResponse(

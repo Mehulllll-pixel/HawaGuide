@@ -43,15 +43,18 @@ for p in [PROJECT_ROOT / "backend" / ".env", PROJECT_ROOT / ".env"]:
         load_dotenv(p)
         break
 
-from backend.app.main import _extract_fields_via_gemini, _extract_fields_from_text
+from backend.app.main import _extract_fields_via_llm, _extract_fields_from_text
 
 
 class TestAgentGenuineExtraction(unittest.TestCase):
 
     def setUp(self):
-        self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            self.skipTest("Gemini API key not configured; skipping live LLM extraction test.")
+        self.groq_key = os.getenv("GROQ_API_KEY")
+        self.gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        has_valid_groq = self.groq_key and not self.groq_key.startswith("your_")
+        has_valid_gemini = self.gemini_key and not self.gemini_key.startswith("your_")
+        if not (has_valid_groq or has_valid_gemini):
+            self.skipTest("No active LLM API key configured (GROQ_API_KEY or GEMINI_API_KEY); skipping live LLM extraction test.")
 
     def test_semantic_extraction_without_literal_keywords(self):
         """
@@ -63,10 +66,14 @@ class TestAgentGenuineExtraction(unittest.TestCase):
         )
 
         try:
-            extracted = _extract_fields_via_gemini(query, self.api_key)
+            extracted = _extract_fields_via_llm(query)
+            print("\n--- ACTUAL EXTRACTED JSON FOR QUERY 1 ---")
+            import json
+            print(json.dumps(extracted, indent=2))
+            print("------------------------------------------\n")
         except Exception as e:
             if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e) or "503" in str(e) or "UNAVAILABLE" in str(e):
-                self.skipTest(f"Gemini API rate limit or service overload: {e}")
+                self.skipTest(f"API rate limit or service overload: {e}")
             raise
 
         self.assertEqual(
@@ -77,9 +84,9 @@ class TestAgentGenuineExtraction(unittest.TestCase):
             "respiratory" in extracted.get("conditions", []) or "asthma" in extracted.get("conditions", []),
             f"Expected 'respiratory' or 'asthma' from 'breathing trouble', got: {extracted.get('conditions')}"
         )
-        self.assertIn(
-            extracted.get("planned_activity"), ["rest", "moderate"],
-            f"Expected 'rest' or 'moderate' from 'stroll', got: {extracted.get('planned_activity')}"
+        self.assertEqual(
+            extracted.get("planned_activity"), "moderate",
+            f"Expected 'moderate' (walking/strolling) from 'stroll', got: {extracted.get('planned_activity')}"
         )
         self.assertAlmostEqual(
             extracted.get("duration_hours", 0.0), 0.75, delta=0.1,
@@ -101,10 +108,14 @@ class TestAgentGenuineExtraction(unittest.TestCase):
         )
 
         try:
-            extracted = _extract_fields_via_gemini(query, self.api_key)
+            extracted = _extract_fields_via_llm(query)
+            print("\n--- ACTUAL EXTRACTED JSON FOR QUERY 2 ---")
+            import json
+            print(json.dumps(extracted, indent=2))
+            print("------------------------------------------\n")
         except Exception as e:
             if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e) or "503" in str(e) or "UNAVAILABLE" in str(e):
-                self.skipTest(f"Gemini API rate limit or service overload: {e}")
+                self.skipTest(f"API rate limit or service overload: {e}")
             raise
 
         self.assertEqual(extracted.get("age_group"), "child")
@@ -121,3 +132,4 @@ class TestAgentGenuineExtraction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -348,19 +348,11 @@ def reason_node(state: AgentState) -> Dict[str, Any]:
     else:
         best_window = f"In {best_hour} hour{'s' if best_hour > 1 else ''} (Lowest PM2.5: {best_pm25:.1f} ug/m³, but risk remains elevated)"
 
+    groq_api_key = os.getenv("GROQ_API_KEY")
     gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     reasoning_summary = {}
 
-    if gemini_api_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-3.6-flash",
-                google_api_key=gemini_api_key,
-                temperature=0.2
-            )
-            prompt = f"""
-You are HawaGuide AI, an intelligent environmental spatial agent for Delhi NCR.
+    prompt = f"""You are HawaGuide AI, an intelligent environmental spatial agent for Delhi NCR.
 Analyze the following user profile, environmental forecast, and 3-Tier recommendation classification:
 
 USER PROFILE:
@@ -386,8 +378,48 @@ TONE AND DIRECTIVENESS GUIDELINES:
 - For TIER 3: Transparently advise that waiting in the next 6h won't meaningfully help, and suggest indoor activities or checking back later.
 
 TASK:
-Provide a concise 2-sentence rationale synthesizing this analysis following the exact advisory rules for {tier}.
-"""
+Provide a concise 2-sentence rationale synthesizing this analysis following the exact advisory rules for {tier}."""
+
+    llm_succeeded = False
+
+    # 1. Try Groq if key is available
+    if groq_api_key and groq_api_key.strip() and not groq_api_key.startswith("your_"):
+        try:
+            from groq import Groq
+            groq_client = Groq(api_key=groq_api_key)
+            target_model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+            completion = groq_client.chat.completions.create(
+                model=target_model,
+                messages=[
+                    {"role": "system", "content": "You are HawaGuide AI, an intelligent environmental spatial agent for Delhi NCR."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2
+            )
+            groq_text = completion.choices[0].message.content.strip()
+            reasoning_summary = {
+                "llm_engine": f"groq:{target_model}",
+                "tier": tier,
+                "tier_name": tier_info["tier_name"],
+                "recommended_park": best_park_name,
+                "best_time_window": best_window,
+                "llm_analysis": groq_text,
+                "tier_info": tier_info
+            }
+            llm_succeeded = True
+        except Exception as groq_err:
+            logging.warning("Groq reasoning failed, checking Gemini fallback: %s", groq_err)
+            sentry_sdk.capture_exception(groq_err)
+
+    # 2. Try Gemini fallback if Groq didn't succeed
+    if not llm_succeeded and gemini_api_key and not gemini_api_key.startswith("your_"):
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-3.6-flash",
+                google_api_key=gemini_api_key,
+                temperature=0.2
+            )
             response = llm.invoke([HumanMessage(content=prompt)])
             
             if isinstance(response.content, str):
@@ -406,33 +438,13 @@ Provide a concise 2-sentence rationale synthesizing this analysis following the 
                 "gemini_analysis": gemini_text,
                 "tier_info": tier_info
             }
-        except Exception as e:
-            logging.warning(f"Gemini API invocation fallback: {e}")
-            try:
-                import sentry_sdk
-                sentry_sdk.capture_exception(e)
-            except Exception:
-                pass
-            if tier == "TIER_1":
-                rationale_text = f"Conditions at {best_park_name} are currently favorable for your profile."
-            elif tier == "TIER_2":
-                if is_near_boundary:
-                    rationale_text = f"Consider waiting {best_hour} hours when conditions at {tier_info['improving_park']} are expected to improve to around {tier_info['improved_band']} levels, though close to the boundary."
-                else:
-                    rationale_text = f"Consider waiting {best_hour} hours when conditions at {tier_info['improving_park']} improve to {tier_info['improved_band']}."
-            else:
-                rationale_text = f"Conditions remain elevated for all 6 hours; {best_park_name} is least-risky if necessary, but indoor activity is recommended."
-            
-            reasoning_summary = {
-                "llm_engine": "heuristic_fallback",
-                "tier": tier,
-                "tier_name": tier_info["tier_name"],
-                "recommended_park": best_park_name,
-                "best_time_window": best_window,
-                "rationale": rationale_text,
-                "tier_info": tier_info
-            }
-    else:
+            llm_succeeded = True
+        except Exception as gemini_err:
+            logging.warning("Gemini reasoning failed, falling back to heuristic: %s", gemini_err)
+            sentry_sdk.capture_exception(gemini_err)
+
+    # 3. Deterministic Heuristic Fallback
+    if not llm_succeeded:
         if tier == "TIER_1":
             rationale_text = f"Conditions at {best_park_name} are currently favorable for your profile."
         elif tier == "TIER_2":
@@ -442,9 +454,9 @@ Provide a concise 2-sentence rationale synthesizing this analysis following the 
                 rationale_text = f"Consider waiting {best_hour} hours when conditions at {tier_info['improving_park']} improve to {tier_info['improved_band']}."
         else:
             rationale_text = f"Conditions remain elevated for all 6 hours; {best_park_name} is least-risky if necessary, but indoor activity is recommended."
-
+        
         reasoning_summary = {
-            "llm_engine": "heuristic_engine",
+            "llm_engine": "heuristic_fallback",
             "tier": tier,
             "tier_name": tier_info["tier_name"],
             "recommended_park": best_park_name,
