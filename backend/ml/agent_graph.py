@@ -34,6 +34,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional, TypedDict
 
+import sentry_sdk
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -409,7 +410,10 @@ Provide a concise 2-sentence rationale synthesizing this analysis following the 
             llm_succeeded = True
         except Exception as groq_err:
             logging.warning("Groq reasoning failed, checking Gemini fallback: %s", groq_err)
-            sentry_sdk.capture_exception(groq_err)
+            try:
+                sentry_sdk.capture_exception(groq_err)
+            except Exception:
+                pass
 
     # 2. Try Gemini fallback if Groq didn't succeed
     if not llm_succeeded and gemini_api_key and not gemini_api_key.startswith("your_"):
@@ -441,7 +445,10 @@ Provide a concise 2-sentence rationale synthesizing this analysis following the 
             llm_succeeded = True
         except Exception as gemini_err:
             logging.warning("Gemini reasoning failed, falling back to heuristic: %s", gemini_err)
-            sentry_sdk.capture_exception(gemini_err)
+            try:
+                sentry_sdk.capture_exception(gemini_err)
+            except Exception:
+                pass
 
     # 3. Deterministic Heuristic Fallback
     if not llm_succeeded:

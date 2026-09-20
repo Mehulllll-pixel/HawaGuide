@@ -45,70 +45,82 @@ def get_current_pevi(location_name: Optional[str] = None, lat: Optional[float] =
     """
     Fetches the current PEVI score and pollutant breakdown for a specific park or nearest green space.
     """
-    conn = get_db_connection()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            if location_name:
-                cur.execute("""
-                    SELECT * FROM pevi_scores
-                    WHERE location_name ILIKE %s
-                    ORDER BY timestamp DESC LIMIT 1;
-                """, (f"%{location_name}%",))
-                row = cur.fetchone()
-            elif lat is not None and lon is not None:
-                # Find closest park via PostGIS
-                cur.execute("""
-                    SELECT p.name, ST_Distance(p.location, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) as dist
-                    FROM parks p
-                    ORDER BY dist ASC LIMIT 1;
-                """, (lon, lat))
-                p_row = cur.fetchone()
-                if p_row:
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if location_name:
                     cur.execute("""
                         SELECT * FROM pevi_scores
-                        WHERE location_name = %s
+                        WHERE location_name ILIKE %s
                         ORDER BY timestamp DESC LIMIT 1;
-                    """, (p_row["name"],))
+                    """, (f"%{location_name}%",))
                     row = cur.fetchone()
+                elif lat is not None and lon is not None:
+                    # Find closest park / green space via PostGIS from interpolated_locations
+                    cur.execute("""
+                        SELECT location_name, ST_Distance(location, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) as dist
+                        FROM interpolated_locations
+                        WHERE location IS NOT NULL
+                        ORDER BY dist ASC LIMIT 1;
+                    """, (lon, lat))
+                    p_row = cur.fetchone()
+                    if p_row:
+                        cur.execute("""
+                            SELECT * FROM pevi_scores
+                            WHERE location_name = %s
+                            ORDER BY timestamp DESC LIMIT 1;
+                        """, (p_row["location_name"],))
+                        row = cur.fetchone()
+                    else:
+                        row = None
                 else:
-                    row = None
-            else:
-                cur.execute("SELECT * FROM pevi_scores ORDER BY timestamp DESC LIMIT 1;")
-                row = cur.fetchone()
+                    cur.execute("SELECT * FROM pevi_scores ORDER BY timestamp DESC LIMIT 1;")
+                    row = cur.fetchone()
 
-        if not row:
-            # Fallback mock baseline if table empty
+            if not row:
+                # Fallback mock baseline if table empty
+                return {
+                    "location_name": location_name or "Lodhi Garden",
+                    "pevi_value": 4.81,
+                    "timestamp": "Latest Available",
+                    "pollutants": {"pm25": 45.0, "pm10": 130.0, "no2": 32.0, "o3": 28.0, "so2": 12.0, "co": 1.1},
+                    "contributions": {"contrib_pm25": 2.1, "contrib_no2": 1.2, "contrib_o3": 0.9, "contrib_pm10": 0.4, "contrib_so2": 0.15, "contrib_co": 0.06}
+                }
+
             return {
-                "location_name": location_name or "Lodhi Garden",
-                "pevi_value": 4.81,
-                "timestamp": "Latest Available",
-                "pollutants": {"pm25": 45.0, "pm10": 130.0, "no2": 32.0, "o3": 28.0, "so2": 12.0, "co": 1.1},
-                "contributions": {"contrib_pm25": 2.1, "contrib_no2": 1.2, "contrib_o3": 0.9, "contrib_pm10": 0.4, "contrib_so2": 0.15, "contrib_co": 0.06}
+                "location_name": row["location_name"],
+                "pevi_value": round(float(row["pevi_value"]), 2),
+                "timestamp": str(row["timestamp"]),
+                "pollutants": {
+                    "pm25_ugm3": round(float(row["pm25_ugm3"] or 0.0), 1),
+                    "pm10_ugm3": round(float(row["pm10_ugm3"] or 0.0), 1),
+                    "no2_ugm3": round(float(row["no2_ugm3"] or 0.0), 1),
+                    "o3_ugm3": round(float(row["o3_ugm3"] or 0.0), 1),
+                    "so2_ugm3": round(float(row["so2_ugm3"] or 0.0), 1),
+                    "co_mgm3": round(float(row["co_mgm3"] or 0.0), 2),
+                },
+                "contributions": {
+                    "contrib_pm25": round(float(row["contrib_pm25"] or 0.0), 2),
+                    "contrib_no2": round(float(row["contrib_no2"] or 0.0), 2),
+                    "contrib_o3": round(float(row["contrib_o3"] or 0.0), 2),
+                    "contrib_pm10": round(float(row["contrib_pm10"] or 0.0), 2),
+                    "contrib_so2": round(float(row["contrib_so2"] or 0.0), 2),
+                    "contrib_co": round(float(row["contrib_co"] or 0.0), 2),
+                }
             }
-
+        finally:
+            conn.close()
+    except Exception as e:
+        import logging
+        logging.warning("Error fetching current PEVI data from DB: %s, using fallback", e)
         return {
-            "location_name": row["location_name"],
-            "pevi_value": round(float(row["pevi_value"]), 2),
-            "timestamp": str(row["timestamp"]),
-            "pollutants": {
-                "pm25_ugm3": round(float(row["pm25_ugm3"] or 0.0), 1),
-                "pm10_ugm3": round(float(row["pm10_ugm3"] or 0.0), 1),
-                "no2_ugm3": round(float(row["no2_ugm3"] or 0.0), 1),
-                "o3_ugm3": round(float(row["o3_ugm3"] or 0.0), 1),
-                "so2_ugm3": round(float(row["so2_ugm3"] or 0.0), 1),
-                "co_mgm3": round(float(row["co_mgm3"] or 0.0), 2),
-            },
-            "contributions": {
-                "contrib_pm25": round(float(row["contrib_pm25"] or 0.0), 2),
-                "contrib_no2": round(float(row["contrib_no2"] or 0.0), 2),
-                "contrib_o3": round(float(row["contrib_o3"] or 0.0), 2),
-                "contrib_pm10": round(float(row["contrib_pm10"] or 0.0), 2),
-                "contrib_so2": round(float(row["contrib_so2"] or 0.0), 2),
-                "contrib_co": round(float(row["contrib_co"] or 0.0), 2),
-            }
+            "location_name": location_name or "Lodhi Garden",
+            "pevi_value": 4.81,
+            "timestamp": "Latest Available",
+            "pollutants": {"pm25": 45.0, "pm10": 130.0, "no2": 32.0, "o3": 28.0, "so2": 12.0, "co": 1.1},
+            "contributions": {"contrib_pm25": 2.1, "contrib_no2": 1.2, "contrib_o3": 0.9, "contrib_pm10": 0.4, "contrib_so2": 0.15, "contrib_co": 0.06}
         }
-    finally:
-        conn.close()
 
 
 # ─── 2. Tool: get_forecast ───────────────────────────────────────────────────
