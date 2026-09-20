@@ -8,7 +8,7 @@
 
 India's official National Air Quality Index (NAQI) reports only the single worst pollutant on a given day (the sub-index maximum principle), ignoring the concurrent burden of the other 5 criteria pollutants. 
 
-HawaGuide's **Personalized Exposure Vulnerability Index (PEVI)** instead integrates the cumulative biological health-risk contribution from all 6 regulatory pollutants measured across Delhi NCR (**$\text{PM}_{2.5}$, $\text{PM}_{10}$, $\text{NO}_2$, $\text{SO}_2$, $\text{O}_3$, $\text{CO}$**) simultaneously. A location with multiple moderately-elevated pollutants is correctly identified as riskier than standard single-pollutant AQI would indicate.
+HawaGuide's **Personalized Exposure Vulnerability Index (PEVI)** instead integrates the cumulative biological health-risk contribution from all 6 regulatory pollutants measured across Delhi NCR (**PM2.5, PM10, NO2, SO2, O3, CO**) simultaneously. A location with multiple moderately-elevated pollutants is correctly identified as riskier than standard single-pollutant AQI would indicate.
 
 ---
 
@@ -276,9 +276,9 @@ For any user starting coordinate (lat, lon), the optimizer balances **environmen
    ```text
    Score = alpha * norm_risk + (1 - alpha) * norm_distance    (lower is better)
    ```
-   * `alpha = 1.0` $\to$ Purely lowest pollution risk.
-   * `alpha = 0.0` $\to$ Purely closest geographic proximity.
-   * `alpha = 0.5` $\to$ Balanced health-travel trade-off.
+   * `alpha = 1.0` -> Purely lowest pollution risk.
+   * `alpha = 0.0` -> Purely closest geographic proximity.
+   * `alpha = 0.5` -> Balanced health-travel trade-off.
 
 ---
 
@@ -312,7 +312,10 @@ A natural-language conversational interface that maintains per-session slot memo
 #### 6-Step Sequential Clarification Flow
 
 Rather than overwhelming the user with a combined question for all missing variables, Hawa asks for missing fields **one at a time in a fixed, logical sequence**:
-$$\text{age\_group} \longrightarrow \text{conditions} \longrightarrow \text{smoker} \longrightarrow \text{planned\_activity} \longrightarrow \text{duration\_hours} \longrightarrow \text{location}$$
+
+```text
+age_group -> conditions -> smoker -> planned_activity -> duration_hours -> location
+```
 
 ```text
 Turn 1  → User: "Find me a place for a morning jog"
@@ -335,7 +338,7 @@ Turn 6  → User: "Connaught Place" (or map pin / GPS click)
 2. **Invalid Response Recovery**: If the user provides an unparseable response to a specific question (e.g., replying `"maybe"` when asked for smoker status), Hawa re-prompts specifically for that field with explicit guidance.
 3. **Casual Closing & Acknowledgment Interception**: Sending polite acknowledgments (`"Thank you"`, `"thanks"`, `"ok"`, `"got it"`, `"bye"`) after a completed recommendation receives a warm closing reply (`"You're welcome! Feel free to ask again whenever you're heading out."`) and does **not** accidentally re-trigger the clarification sequence.
 4. **Delhi NCR Boundary Check (`is_within_delhi_ncr`)**:
-   - Resolved coordinates are verified against the operational boundary: $\text{lat} \in [28.0, 29.2], \text{lon} \in [76.5, 77.9]$.
+   - Resolved coordinates are verified against the operational boundary: lat 28.0 to 29.2, lon 76.5 to 77.9.
    - If outside the area (e.g. Jaipur, Mumbai), Hawa does **not** recommend an absurd 200+ km Delhi park trip. Instead, it responds honestly:
      *"I'm currently built specifically for Delhi NCR and don't have real air quality data for [detected place name] yet — I'll be able to help when I expand to your city!"*
 5. **Reverse-Geocoded Location Display**: Coordinates captured via GPS or the map picker are reverse-geocoded via Nominatim before display, ensuring user chat bubbles and replies display clean place names (e.g. `"Lodhi Colony, New Delhi"` or `"Jaipur, Rajasthan"`) rather than raw floats like `"28.5931, 77.2197"`.
@@ -393,48 +396,45 @@ The foundational risk-additive mathematical structure directly adopts the peer-r
 
 The published 3-pollutant base formula is:
 
-$$
-\text{AQHI}_{\text{base}} = \left(\frac{10}{10.4}\right) \times 100 \times \left[ \left(e^{0.000537 \times \text{O}_3} - 1\right) + \left(e^{0.000871 \times \text{NO}_2} - 1\right) + \left(e^{0.000487 \times \text{PM}_{2.5}} - 1\right) \right]
-$$
+```text
+AQHI_base = (10 / 10.4) * 100 * [ (e^(0.000537 * O3) - 1) + (e^(0.000871 * NO2) - 1) + (e^(0.000487 * PM2.5) - 1) ]
+```
 
-* **Input Units**: $\text{O}_3$ and $\text{NO}_2$ in $\text{ppb}$; $\text{PM}_{2.5}$ in $\mu\text{g/m}^3$.
-* **Unit Conversion**: Because HawaGuide's PostGIS database stores ambient gas concentrations in $\mu\text{g/m}^3$, standard **EPA atmospheric reference conversion factors** (at $25^\circ\text{C}$, $1\text{ atm}$, molar volume $V_m = 24.45\text{ L/mol}$) are applied prior to exponential risk calculation:
+* **Input Units**: O3 and NO2 in ppb; PM2.5 in µg/m³.
+* **Unit Conversion**: Because HawaGuide's PostGIS database stores ambient gas concentrations in µg/m³, standard **EPA atmospheric reference conversion factors** (at 25°C, 1 atm, molar volume V_m = 24.45 L/mol) are applied prior to exponential risk calculation:
 
-$$
-\text{O}_3\ (\text{ppb}) = \text{O}_3\ (\mu\text{g/m}^3) \times \frac{24.45}{47.998} \approx \text{O}_3 \times 0.50940
-$$
-
-$$
-\text{NO}_2\ (\text{ppb}) = \text{NO}_2\ (\mu\text{g/m}^3) \times \frac{24.45}{46.005} \approx \text{NO}_2 \times 0.53146
-$$
+```text
+O3 (ppb)  = O3 (µg/m³) * (24.45 / 47.998) ≈ O3 * 0.50940
+NO2 (ppb) = NO2 (µg/m³) * (24.45 / 46.005) ≈ NO2 * 0.53146
+```
 
 ---
 
 #### HawaGuide Multipollutant Extension (PM10, SO2, CO)
 
 > [!NOTE]
-> **Attribution & Non-Peer-Reviewed Scope**: The risk terms for $\text{PM}_{10}$, $\text{SO}_2$, and $\text{CO}$ represent a **custom engineering extension developed specifically for HawaGuide**. They are **explicitly separate from the original published Canadian AQHI model** (Stieb et al. 2008), which was calibrated on a 3-pollutant mortality dataset.
+> **Attribution & Non-Peer-Reviewed Scope**: The risk terms for PM10, SO2, and CO represent a **custom engineering extension developed specifically for HawaGuide**. They are **explicitly separate from the original published Canadian AQHI model** (Stieb et al. 2008), which was calibrated on a 3-pollutant mortality dataset.
 
-To account for Delhi NCR's severe coarse dust episodes ($\text{PM}_{10}$), industrial sulfur emissions ($\text{SO}_2$), and vehicular combustion ($\text{CO}$), equivalent exponential excess-risk terms are derived by scaling relative to the **WHO 2021 Air Quality Guideline** thresholds (stricter benchmark implies higher assumed biological risk coefficient):
+To account for Delhi NCR's severe coarse dust episodes (PM10), industrial sulfur emissions (SO2), and vehicular combustion (CO), equivalent exponential excess-risk terms are derived by scaling relative to the **WHO 2021 Air Quality Guideline** thresholds (stricter benchmark implies higher assumed biological risk coefficient):
 
-$$
-\beta_{\text{pollutant}} = \beta_{\text{PM}_{2.5}} \times \left( \frac{\text{Guideline}_{\text{PM}_{2.5}}}{\text{Guideline}_{\text{pollutant}}} \right)
-$$
+```text
+beta_pollutant = beta_PM2.5 * ( Guideline_PM2.5 / Guideline_pollutant )
+```
 
-| Pollutant | Stored Unit | WHO Guideline Threshold | Guideline Ratio vs PM2.5 | Derived Excess Risk Coefficient ($\beta$) | Source / Formulation |
+| Pollutant | Stored Unit | WHO Guideline Threshold | Guideline Ratio vs PM2.5 | Derived Excess Risk Coefficient (β) | Source / Formulation |
 |---|---|---|---|---|---|
-| **O3** | $\mu\text{g/m}^3 \to \text{ppb}$ | $100\ \mu\text{g/m}^3$ (8-hr) | — | $\mathbf{0.000537}\ \text{ppb}^{-1}$ | Published (Stieb et al. 2008) |
-| **NO2** | $\mu\text{g/m}^3 \to \text{ppb}$ | $25\ \mu\text{g/m}^3$ (24-hr) | — | $\mathbf{0.000871}\ \text{ppb}^{-1}$ | Published (Stieb et al. 2008) |
-| **PM2.5** | $\mu\text{g/m}^3$ | $15\ \mu\text{g/m}^3$ (24-hr) | $1.000$ | $\mathbf{0.000487}\ (\mu\text{g/m}^3)^{-1}$ | Published (Stieb et al. 2008) |
-| **PM10** | $\mu\text{g/m}^3$ | $45\ \mu\text{g/m}^3$ (24-hr) | $15 / 45 = 0.333$ | $\mathbf{0.000162}\ (\mu\text{g/m}^3)^{-1}$ | HawaGuide Extension |
-| **SO2** | $\mu\text{g/m}^3$ | $40\ \mu\text{g/m}^3$ (24-hr) | $15 / 40 = 0.375$ | $\mathbf{0.000183}\ (\mu\text{g/m}^3)^{-1}$ | HawaGuide Extension |
-| **CO** | $\text{mg/m}^3$ | $4.0\ \text{mg/m}^3$ (8-hr) | $(15 \times 0.000487) / 4.0$ | $\mathbf{0.001826}\ (\text{mg/m}^3)^{-1}$ | HawaGuide Extension |
+| **O3** | µg/m³ -> ppb | 100 µg/m³ (8-hr) | — | **0.000537 ppb⁻¹** | Published (Stieb et al. 2008) |
+| **NO2** | µg/m³ -> ppb | 25 µg/m³ (24-hr) | — | **0.000871 ppb⁻¹** | Published (Stieb et al. 2008) |
+| **PM2.5** | µg/m³ | 15 µg/m³ (24-hr) | 1.000 | **0.000487 (µg/m³)⁻¹** | Published (Stieb et al. 2008) |
+| **PM10** | µg/m³ | 45 µg/m³ (24-hr) | 15 / 45 = 0.333 | **0.000162 (µg/m³)⁻¹** | HawaGuide Extension |
+| **SO2** | µg/m³ | 40 µg/m³ (24-hr) | 15 / 40 = 0.375 | **0.000183 (µg/m³)⁻¹** | HawaGuide Extension |
+| **CO** | mg/m³ | 4.0 mg/m³ (8-hr) | (15 * 0.000487) / 4.0 | **0.001826 (mg/m³)⁻¹** | HawaGuide Extension |
 
 #### Complete PEVI Equation
 
-$$
-\text{PEVI} = \left(\frac{10}{10.4}\right) \times 100 \times \left[ \sum_{p \in \{\text{O}_3, \text{NO}_2, \text{PM}_{2.5}\}} \left(e^{\beta_p C_p} - 1\right) + \sum_{q \in \{\text{PM}_{10}, \text{SO}_2, \text{CO}\}} \left(e^{\beta_q C_q} - 1\right) \right]
-$$
+```text
+PEVI = (10 / 10.4) * 100 * [ Σ_(p ∈ {O3, NO2, PM2.5}) (e^(β_p * C_p) - 1) + Σ_(q ∈ {PM10, SO2, CO}) (e^(β_q * C_q) - 1) ]
+```
 
 ---
 
@@ -445,7 +445,7 @@ During development of the PEVI pipeline, a rigorous unit and magnitude validatio
 * **Observed Inconsistency**: OpenAQ v3 sensor metadata lists active CPCB CO sensors under `units="ppb"` (e.g., sensor `12234748` at ITO).
 * **Magnitude Sanity Check**: Ingested CO numerical values range between **0.10 and 6.0 mg/m³** (with peak localized spikes up to 43.0). If these numbers were truly in ppb, ambient CO across Delhi would equal 0.0001 - 0.006 ppm — an impossibly clean reading that violates atmospheric chemistry baselines. In mg/m³, these values align precisely with Delhi's known ambient concentration range (0.5 - 3.0 mg/m³) and the WHO 8-hour benchmark (4.0 mg/m³).
 * **Literature Context**: This reflects a documented unit-labeling inconsistency in Indian CPCB data transmitted via OpenAQ, where mass concentrations in mg/m³ are periodically ingested under volumetric ppb parameter tags (see *Vohra et al., Science of The Total Environment*, ScienceDirect, on data quality and unit reporting anomalies across Indian air quality networks).
-* **Implementation Fix**: HawaGuide explicitly treats and processes all CO readings as **mg/m³**, utilizing the WHO-calibrated coefficient $\beta_{\text{CO}} = 0.001826\ (\text{mg/m}^3)^{-1}$.
+* **Implementation Fix**: HawaGuide explicitly treats and processes all CO readings as **mg/m³**, utilizing the WHO-calibrated coefficient β_CO = 0.001826 (mg/m³)⁻¹.
 
 ---
 
@@ -454,53 +454,53 @@ During development of the PEVI pipeline, a rigorous unit and magnitude validatio
 To evaluate whether proximity to localized high-emission monitors skews park vulnerability scores or creates sharp distance-decay artifacts, great-circle distances were computed from each of the 40 parks to Delhi's two primary industrial/transit monitoring hotspots: **Anand Vihar** (DPCC) and **Punjabi Bagh** (DPCC):
 
 * **Statistical Correlations (All 40 Urban Parks)**:
-  * **Distance to Nearest Hotspot vs. PEVI**: Pearson $r = -0.2844$ (Weak inverse correlation), Spearman $\rho = -0.2668$
-  * **Distance to Anand Vihar vs. PEVI**: Pearson $r = -0.1004$ ($p = 0.54$, virtually uncorrelated), Spearman $\rho = +0.0008$
-  * **Distance to Punjabi Bagh vs. PEVI**: Pearson $r = -0.7946$ ($p = 9.25 \times 10^{-10}$), Spearman $\rho = -0.8143$
+  * **Distance to Nearest Hotspot vs. PEVI**: Pearson r = -0.2844 (Weak inverse correlation), Spearman ρ = -0.2668
+  * **Distance to Anand Vihar vs. PEVI**: Pearson r = -0.1004 (p = 0.54, virtually uncorrelated), Spearman ρ = +0.0008
+  * **Distance to Punjabi Bagh vs. PEVI**: Pearson r = -0.7946 (p = 9.25 × 10⁻¹⁰), Spearman ρ = -0.8143
 
-* **Sensitivity & Robustness Analysis of the Punjabi Bagh Correlation ($N=40$)**:
-  * **Distance Range**: $4.2\text{ km}$ (Rohini District Park) to $35.8\text{ km}$ (Town Park Faridabad), mean distance $16.9\text{ km}$.
+* **Sensitivity & Robustness Analysis of the Punjabi Bagh Correlation (N = 40)**:
+  * **Distance Range**: 4.2 km (Rohini District Park) to 35.8 km (Town Park Faridabad), mean distance 16.9 km.
   * **Outlier & Boundary Sensitivity Checks**:
-    * Removing the 3 farthest parks (Faridabad / Ghaziabad, $N=37$): Pearson $r = -0.8529$, Spearman $\rho = -0.8390$.
-    * Removing the 3 closest parks (Rohini / Shalimar Bagh, $N=37$): Pearson $r = -0.8468$, Spearman $\rho = -0.8637$.
-    * Leave-one-out sensitivity testing yields a maximum $\Delta r \le 0.034$ across all 40 parks, confirming the correlation is not an artifact driven by extreme leverage outliers.
+    * Removing the 3 farthest parks (Faridabad / Ghaziabad, N = 37): Pearson r = -0.8529, Spearman ρ = -0.8390.
+    * Removing the 3 closest parks (Rohini / Shalimar Bagh, N = 37): Pearson r = -0.8468, Spearman ρ = -0.8637.
+    * Leave-one-out sensitivity testing yields a maximum Δr <= 0.034 across all 40 parks, confirming the correlation is not an artifact driven by extreme leverage outliers.
   * **Driver of the Difference (Macro Regional Gradient vs. Local Plume)**:
-    * Punjabi Bagh ($28.674^\circ\text{N}, 77.131^\circ\text{E}$) is located in the **North-Western corner** of Delhi NCR.
-    * The underlying regional pollution surface exhibits a broad Northwest-to-Southeast macro-gradient (PEVI correlates with Latitude at $r = +0.4638$ and with Longitude at $r = -0.4931$).
+    * Punjabi Bagh (28.674°N, 77.131°E) is located in the **North-Western corner** of Delhi NCR.
+    * The underlying regional pollution surface exhibits a broad Northwest-to-Southeast macro-gradient (PEVI correlates with Latitude at r = +0.4638 and with Longitude at r = -0.4931).
     * Because Punjabi Bagh sits at the high-concentration terminus of this regional gradient, radial distance from Punjabi Bagh strongly co-varies with the broader macro-gradient across Delhi NCR.
-    * In contrast, Anand Vihar ($28.648^\circ\text{N}, 77.316^\circ\text{E}$) is located on the Eastern border, directly adjacent to cleaner East/South-East peripheral parks (e.g. *Smriti Van* at $\text{PEVI} = 3.38$, *Meghdootam Park* at $\text{PEVI} = 3.45$, located $7.9 - 8.2\text{ km}$ away) while central parks $12+\text{ km}$ to the west have higher baseline vulnerability ($5.5 - 6.5$).
+    * In contrast, Anand Vihar (28.648°N, 77.316°E) is located on the Eastern border, directly adjacent to cleaner East/South-East peripheral parks (e.g. *Smriti Van* at PEVI = 3.38, *Meghdootam Park* at PEVI = 3.45, located 7.9 - 8.2 km away) while central parks 12+ km to the west have higher baseline vulnerability (5.5 - 6.5).
 
 * **Physical & Geostatistical Interpretation**:
-  * Cleanest, lowest-vulnerability parks in the East/South-East periphery remain low-risk despite being within $8\text{ km}$ of Anand Vihar, while central parks further away experience elevated exposure.
+  * Cleanest, lowest-vulnerability parks in the East/South-East periphery remain low-risk despite being within 8 km of Anand Vihar, while central parks further away experience elevated exposure.
   * **Synthesis**: This is consistent with Ordinary Kriging's known spatial smoothing behavior (regression toward the regional background mean across the convex hull), though a correlation this weak alone doesn't prove causation — it serves as one piece of supporting empirical evidence alongside the underlying Gaussian random field mathematical formulation.
 
 ---
 
 ### 5. Multi-Horizon Trajectory Forecasting (100% XGBoost v3 vs. LSTM Ablation)
 
-HawaGuide generates 1 to 6-hour ahead $\text{PM}_{2.5}$ delta forecasts ($\Delta \text{PM}_{2.5}(t+h) = \text{PM}_{2.5}(t+h) - \text{Baseline}_{24\text{h}}$) across all monitoring stations. 
+HawaGuide generates 1 to 6-hour ahead PM2.5 delta forecasts (ΔPM2.5(t+h) = PM2.5(t+h) - Baseline_24h) across all monitoring stations. 
 
 #### Evaluated Feature Set (15 Engineered Signals):
-- **Autoregressive Lags**: $\text{lag}_1, \text{lag}_2, \text{lag}_3, \text{lag}_6, \text{lag}_{24}$
-- **Rolling Baselines & Dynamics**: $\text{rolling\_mean}_{6\text{h}}, \text{rolling\_mean}_{24\text{h}}, \text{recent\_trend} = \text{lag}_1 - \text{lag}_3$
-- **Diurnal Encodings**: $\text{hour\_of\_day}, \text{day\_of\_week}$
-- **Meteorology**: $\text{wind\_speed}, \text{wind\_direction}, \text{humidity}, \text{precipitation}, \text{temperature}$
+- **Autoregressive Lags**: lag_1, lag_2, lag_3, lag_6, lag_24
+- **Rolling Baselines & Dynamics**: rolling_mean_6h, rolling_mean_24h, recent_trend = lag_1 - lag_3
+- **Diurnal Encodings**: hour_of_day, day_of_week
+- **Meteorology**: wind_speed, wind_direction, humidity, precipitation, temperature
 
-#### Empirical Benchmark & Architecture Decision ($N_{\text{test}} = 3,381$ held-out samples)
+#### Empirical Benchmark & Architecture Decision (N_test = 3,381 held-out samples)
 
 | Horizon | Metric | Persistence Baseline | **XGBoost v3 (Selected)** | PyTorch LSTM | 75/25 Ensemble |
 |---|---|---|---|---|---|
-| **$t+1\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 11.59 / 17.85 µg/m³<br>+0.135 / 0.434 | **10.49 / 15.55 µg/m³**<br>**+0.344** / **0.571** | 22.05 / 31.50 µg/m³<br>-1.694 / -0.761 | 11.72 / 16.86 µg/m³<br>+0.228 / 0.495 |
-| **$t+2\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 13.79 / 20.38 µg/m³<br>-0.122 / 0.264 | **12.05 / 17.31 µg/m³**<br>**+0.191** / **0.469** | 21.27 / 30.30 µg/m³<br>-1.480 / -0.628 | 12.84 / 18.30 µg/m³<br>+0.095 / 0.406 |
-| **$t+3\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 15.22 / 22.05 µg/m³<br>-0.312 / 0.138 | **12.99 / 18.20 µg/m³**<br>**+0.106** / **0.413** | 20.72 / 29.33 µg/m³<br>-1.322 / -0.526 | 13.55 / 19.02 µg/m³<br>+0.023 / 0.358 |
-| **$t+4\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 16.35 / 23.24 µg/m³<br>-0.450 / 0.046 | **13.47 / 18.69 µg/m³**<br>**+0.062** / **0.383** | 20.28 / 28.80 µg/m³<br>-1.228 / -0.465 | 14.00 / 19.46 µg/m³<br>-0.017 / 0.331 |
-| **$t+5\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 17.12 / 23.97 µg/m³<br>-0.534 / -0.009 | **13.78 / 19.13 µg/m³**<br>**+0.022** / **0.357** | 20.11 / 28.42 µg/m³<br>-1.157 / -0.419 | 14.19 / 19.71 µg/m³<br>-0.038 / 0.317 |
-| **$t+6\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 17.59 / 24.60 µg/m³<br>-0.611 / -0.058 | **13.94 / 19.38 µg/m³**<br>**-0.000** / **0.343** | 20.11 / 28.22 µg/m³<br>-1.120 / -0.393 | 14.35 / 19.89 µg/m³<br>-0.053 / 0.308 |
+| **t+1h** | **MAE** / **RMSE**<br>R²_within / R²_pooled | 11.59 / 17.85 µg/m³<br>+0.135 / 0.434 | **10.49 / 15.55 µg/m³**<br>**+0.344** / **0.571** | 22.05 / 31.50 µg/m³<br>-1.694 / -0.761 | 11.72 / 16.86 µg/m³<br>+0.228 / 0.495 |
+| **t+2h** | **MAE** / **RMSE**<br>R²_within / R²_pooled | 13.79 / 20.38 µg/m³<br>-0.122 / 0.264 | **12.05 / 17.31 µg/m³**<br>**+0.191** / **0.469** | 21.27 / 30.30 µg/m³<br>-1.480 / -0.628 | 12.84 / 18.30 µg/m³<br>+0.095 / 0.406 |
+| **t+3h** | **MAE** / **RMSE**<br>R²_within / R²_pooled | 15.22 / 22.05 µg/m³<br>-0.312 / 0.138 | **12.99 / 18.20 µg/m³**<br>**+0.106** / **0.413** | 20.72 / 29.33 µg/m³<br>-1.322 / -0.526 | 13.55 / 19.02 µg/m³<br>+0.023 / 0.358 |
+| **t+4h** | **MAE** / **RMSE**<br>R²_within / R²_pooled | 16.35 / 23.24 µg/m³<br>-0.450 / 0.046 | **13.47 / 18.69 µg/m³**<br>**+0.062** / **0.383** | 20.28 / 28.80 µg/m³<br>-1.228 / -0.465 | 14.00 / 19.46 µg/m³<br>-0.017 / 0.331 |
+| **t+5h** | **MAE** / **RMSE**<br>R²_within / R²_pooled | 17.12 / 23.97 µg/m³<br>-0.534 / -0.009 | **13.78 / 19.13 µg/m³**<br>**+0.022** / **0.357** | 20.11 / 28.42 µg/m³<br>-1.157 / -0.419 | 14.19 / 19.71 µg/m³<br>-0.038 / 0.317 |
+| **t+6h** | **MAE** / **RMSE**<br>R²_within / R²_pooled | 17.59 / 24.60 µg/m³<br>-0.611 / -0.058 | **13.94 / 19.38 µg/m³**<br>**-0.000** / **0.343** | 20.11 / 28.22 µg/m³<br>-1.120 / -0.393 | 14.35 / 19.89 µg/m³<br>-0.053 / 0.308 |
 
 #### Key Conclusions:
-1. **XGBoost v3 Superiority**: Pure XGBoost v3 achieved the lowest MAE and highest skill across all horizons (peak $R^2_{\text{within}} = \mathbf{+0.344}$ at $t+1\text{h}$, $\mathbf{+0.191}$ at $t+2\text{h}$, $\mathbf{+0.106}$ at $t+3\text{h}$).
-2. **LSTM Exclusion**: The PyTorch sequence model suffered from high variance on delta targets with sparse 14-station lookbacks ($R^2_{\text{within}} < 0$). Adding a 25% LSTM weight diluted XGBoost performance across all 6 horizons.
-3. **Production Deployment**: Production inference in `forecast_engine.py` is configured as **100% XGBoost v3** ($w_{\text{xgb}} = 1.0, w_{\text{lstm}} = 0.0$).
+1. **XGBoost v3 Superiority**: Pure XGBoost v3 achieved the lowest MAE and highest skill across all horizons (peak R²_within = **+0.344** at t+1h, **+0.191** at t+2h, **+0.106** at t+3h).
+2. **LSTM Exclusion**: The PyTorch sequence model suffered from high variance on delta targets with sparse 14-station lookbacks (R²_within < 0). Adding a 25% LSTM weight diluted XGBoost performance across all 6 horizons.
+3. **Production Deployment**: Production inference in `forecast_engine.py` is configured as **100% XGBoost v3** (w_xgb = 1.0, w_lstm = 0.0).
 
 ---
 
@@ -522,7 +522,7 @@ Derived from the unweighted 40-park baseline distribution:
 | **Band 4: Highest Relative Vulnerability** | Base PEVI > 5.65 (Q4) | 10 | Nehru Park (5.70), Central Park (6.16), Amrit Udyan (6.23), Talkatora Gardens (6.43), Roshanara Bagh (7.07) |
 
 #### Personalized PEVI Relative Risk Bands (Individual Inhaled Burden)
-Derived from the empirical pooled distribution across representative demographic personas ($N=160$ across 4 sensitivity tiers):
+Derived from the empirical pooled distribution across representative demographic personas (N = 160 across 4 sensitivity tiers):
 
 | Personalized Risk Band | Personalized PEVI Range | Consumer Advisory Guidance (AirLief / AirVisual Style) |
 |---|---|---|
@@ -586,9 +586,9 @@ The backend instruments FastAPI endpoints and LLM invocations using `@sentry/pyt
 ### 1. Linear Weighted-Average Constraint (Regression to the Mean)
 Ordinary Kriging calculates unmonitored location values as a best linear unbiased estimator:
 
-$$
-\hat{Z}(x_0) = \sum_{i=1}^n \lambda_i Z(x_i), \quad \text{subject to } \sum_{i=1}^n \lambda_i = 1
-$$
+```text
+Ẑ(x0) = Σ (λi * Z(xi)),  subject to Σ λi = 1
+```
 
 Because all weights sum to 1 and negative weights are mathematically bounded, Kriging operates as a **convex hull spatial smoothing operator**. It **cannot extrapolate or predict values more extreme** than its surrounding observation points.
 
