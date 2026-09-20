@@ -123,17 +123,22 @@ def calc_within_station_r2(df_eval: pd.DataFrame, actual_col: str, pred_col: str
 
 
 def get_db_connection():
-    db_url = os.getenv("DATABASE_URL")
-    if db_url:
-        return psycopg2.connect(db_url)
-    
-    return psycopg2.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        port=os.getenv("DB_PORT", "5432"),
-        dbname=os.getenv("DB_NAME", "hawaguide_db"),
-        user=os.getenv("DB_USER", "postgres"),
-        password=os.getenv("DB_PASSWORD")
-    )
+    host = os.getenv("DB_HOST", "localhost")
+    port = os.getenv("DB_PORT", "5432")
+    dbname = os.getenv("DB_NAME", "hawaguide_db")
+    user = os.getenv("DB_USER", "postgres")
+    password = os.getenv("DB_PASSWORD", "")
+
+    conn_params = {
+        "host": host,
+        "port": port,
+        "dbname": dbname,
+        "user": user,
+    }
+    if password:
+        conn_params["password"] = password
+
+    return psycopg2.connect(**conn_params)
 
 
 def load_raw_data(conn) -> Tuple[pd.DataFrame, pd.DataFrame]:

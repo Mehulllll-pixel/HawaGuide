@@ -34,6 +34,10 @@ Honest documentation of real improvements identified during development, deliber
 - Wait-time browser notification reminders
 - "Explain why" expandable reasoning breakdown under each recommendation
 
+## Security & Hardening
+
+**API rate limiting**: Public endpoints (`/locations`, `/forecast`, `/agent/ask`) currently have no rate limiting - nothing prevents rapid, repeated automated requests. A standard, common practice (e.g. using `slowapi` or FastAPI middleware) would cap requests per IP/session, protecting both against abuse and against unexpectedly burning through the Groq/Gemini API quota from automated traffic. Not implemented yet - a genuine, standard hardening step worth adding before wide public sharing, not a blocker for initial deployment.
+
 ## Infrastructure (Deprioritized Per Original Scope)
 
 - Neo4j graph database (was planned to replace the plain distance-based optimizer)

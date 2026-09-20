@@ -111,25 +111,21 @@ def calc_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 def get_db_connection():
     """Establish and return a connection to the PostgreSQL database."""
-    db_url = os.getenv("DATABASE_URL")
-    if db_url:
-        return psycopg2.connect(db_url)
-    
     host = os.getenv("DB_HOST", "localhost")
     port = os.getenv("DB_PORT", "5432")
     dbname = os.getenv("DB_NAME", "hawaguide_db")
     user = os.getenv("DB_USER", "postgres")
-    password = os.getenv("DB_PASSWORD")
-    
+    password = os.getenv("DB_PASSWORD", "")
+
     conn_params = {
         "host": host,
         "port": port,
         "dbname": dbname,
         "user": user,
     }
-    if password is not None:
+    if password:
         conn_params["password"] = password
-        
+
     return psycopg2.connect(**conn_params)
 
 

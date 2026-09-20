@@ -55,6 +55,7 @@ from backend.ml.optimizer import (
     get_base_pevi_band,
     get_personalized_guidance,
     get_db_connection,
+    ensure_parks_table,
     MEDICAL_DISCLAIMER,
     DELHI_NCR_PARKS
 )
@@ -258,6 +259,7 @@ def get_all_locations():
     """
     conn = get_db_connection()
     try:
+        ensure_parks_table(conn)
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
                 WITH latest_pevi AS (

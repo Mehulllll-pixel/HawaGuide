@@ -128,15 +128,22 @@ DELHI_NCR_PARKS = [
 
 def get_db_connection():
     """Establish and return a PostgreSQL connection."""
-    db_url = os.getenv("DATABASE_URL")
-    if db_url:
-        return psycopg2.connect(db_url)
-    user = os.getenv("DB_USER", "postgres")
-    pwd  = os.getenv("DB_PASSWORD", "")
     host = os.getenv("DB_HOST", "localhost")
     port = os.getenv("DB_PORT", "5432")
-    db   = os.getenv("DB_NAME", "postgres")
-    return psycopg2.connect(f"postgresql://{user}:{pwd}@{host}:{port}/{db}")
+    dbname = os.getenv("DB_NAME", "hawaguide_db")
+    user = os.getenv("DB_USER", "postgres")
+    password = os.getenv("DB_PASSWORD", "")
+
+    conn_params = {
+        "host": host,
+        "port": port,
+        "dbname": dbname,
+        "user": user,
+    }
+    if password:
+        conn_params["password"] = password
+
+    return psycopg2.connect(**conn_params)
 
 def ensure_parks_table(conn):
     """Ensure the parks table exists in PostGIS with spatial geography points."""
