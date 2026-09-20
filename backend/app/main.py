@@ -6,6 +6,7 @@ HawaGuide — Backend FastAPI Application & Spatial Optimization Service
 
 import os
 import sys
+import re
 import json
 import math
 import logging

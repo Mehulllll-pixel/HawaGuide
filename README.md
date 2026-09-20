@@ -6,7 +6,9 @@
 
 ## Why HawaGuide?
 
-India's official AQI reports only the single worst pollutant on a given day, ignoring the other 5. HawaGuide's PEVI instead adds up the real health-risk contribution from all 6 measured pollutants (PM2.5, PM10, NO2, SO2, O3, CO) together - so a location with several moderately-bad pollutants is correctly shown as riskier than standard AQI would suggest.
+India's official National Air Quality Index (NAQI) reports only the single worst pollutant on a given day (the sub-index maximum principle), ignoring the concurrent burden of the other 5 criteria pollutants. 
+
+HawaGuide's **Personalized Exposure Vulnerability Index (PEVI)** instead integrates the cumulative biological health-risk contribution from all 6 regulatory pollutants measured across Delhi NCR (**$\text{PM}_{2.5}$, $\text{PM}_{10}$, $\text{NO}_2$, $\text{SO}_2$, $\text{O}_3$, $\text{CO}$**) simultaneously. A location with multiple moderately-elevated pollutants is correctly identified as riskier than standard single-pollutant AQI would indicate.
 
 ---
 
@@ -26,7 +28,7 @@ India's official AQI reports only the single worst pollutant on a given day, ign
 
 ### 4. Conversational Air Quality Agent ("Hawa")
 ![Conversational Air Quality Agent](docs/screenshots/agent-chat.png)
-*Autonomous LLM assistant with structured health profile clarification, personalized route advice, and live environmental intelligence.*
+*Sequential multi-turn assistant with structured health profile clarification, interactive Leaflet map picker, out-of-region boundary protection, and localStorage profile memory.*
 
 ---
 
@@ -34,11 +36,11 @@ India's official AQI reports only the single worst pollutant on a given day, ign
 
 HawaGuide is an end-to-end environmental intelligence platform built on five core pillars:
 
-1. **Continuous Regulatory Ingestion**: Ingests multi-pollutant measurements from regulatory monitoring networks (CPCB, DPCC, IMD, IITM, UPPCB, HSPCB) via the OpenAQ v3 API and persists spatial observations in PostGIS.
-2. **Geostatistical Kriging to Green Spaces**: Uses Ordinary Kriging with empirical variogram modeling to interpolate continuous pollution surfaces across 40 urban parks.
+1. **Continuous Regulatory Ingestion**: Ingests multi-pollutant measurements from regulatory monitoring networks (CPCB, DPCC, IMD, IITM, UPPCB, HSPCB) via the OpenAQ v3 API and concurrent weather parameters via Open-Meteo, persisting spatial observations in PostGIS.
+2. **Geostatistical Kriging to Green Spaces**: Uses Ordinary Kriging with empirical variogram modeling to interpolate continuous pollution surfaces across 40 urban parks from a 24-hour rolling mean baseline.
 3. **5-Factor Personalized Vulnerability (PEVI)**: Adjusts raw multi-pollutant ambient risk using individual demographic, physiological, respiratory/cardiac, and activity-duration multipliers.
-4. **Multi-Horizon Trajectory Forecasting**: Generates 6-hour predictive trajectories using an evaluated 100% XGBoost v3 model conditioned on diurnal signals and lag dynamics.
-5. **Conversational Intelligence**: An autonomous LangGraph agent powered by Google Gemini that extracts health constraints from natural language, resolves routes, and offers contextual recommendations.
+4. **Multi-Horizon Trajectory Forecasting**: Generates 6-hour predictive trajectories using a 100% XGBoost v3 multi-horizon model conditioned on autoregressive lags and diurnal meteorology (empirically selected over a hybrid LSTM blend).
+5. **Conversational Intelligence & Guardrails**: An autonomous LangGraph agent powered by **Groq (`openai/gpt-oss-120b`)** as primary high-speed engine and **Google Gemini** as fallback, featuring a 6-step sequential clarification flow, invalid response recovery, casual closing interception, `localStorage` profile memory, and Delhi NCR boundary protection.
 
 ---
 
@@ -46,31 +48,70 @@ HawaGuide is an end-to-end environmental intelligence platform built on five cor
 
 ```text
 HawaGuide/
-├── README.md                           # Project Documentation & Limitations
+├── README.md                           # Project Documentation, Methodology & Audits
 ├── .gitignore                          # Repository ignores (venv, .env, __pycache__)
+├── .github/
+│   └── workflows/
+│       └── ci.yml                      # GitHub Actions CI matrix with PostGIS 15 service
+├── docs/
+│   ├── FUTURE_IMPROVEMENTS.md          # Categorized, Reasoned Deferred Architecture Items
+│   └── screenshots/                    # UI component walkthrough screenshots
 ├── backend/
-│   ├── .env                            # PostgreSQL & API Credentials
+│   ├── .env                            # Database, Groq, Gemini & Sentry credentials
 │   ├── .env.example                    # Environment variable template
 │   ├── requirements.txt                # Python dependencies
-│   ├── app/                            # FastAPI backend service (endpoints, PEVI APIs)
-│   │   └── __init__.py
-│   ├── data_pipeline/                  # Data ingestion & PostGIS management
+│   ├── app/                            # FastAPI backend service
+│   │   ├── __init__.py
+│   │   └── main.py                     # FastAPI routes, geocoding, boundary check, /agent/ask
+│   ├── data_pipeline/                  # Ingestion & PostGIS management
 │   │   ├── __init__.py
 │   │   ├── schema.sql                  # PostGIS DDL schema & spatial indexes
 │   │   ├── setup_db.py                 # Automated schema & extension initializer
 │   │   ├── openaq_stations.py          # Active Delhi NCR station discovery & ingestion
-│   │   └── openaq_readings.py          # 90-day hourly multi-pollutant measurements sync
+│   │   ├── openaq_readings.py          # 90-day hourly multi-pollutant measurements sync
+│   │   ├── weather_ingest.py           # Historical & live Open-Meteo weather ingestion
+│   │   └── seed_ci_data.py             # Deterministic test database seeder for CI runs
 │   ├── ml/                             # Geostatistical & ML models
 │   │   ├── __init__.py
 │   │   ├── kriging.py                  # Ordinary Kriging, LOOCV & 40-Park PEVI estimation
 │   │   ├── pevi.py                     # 6-Pollutant PEVI calculation & risk banding
-│   │   ├── forecast_xgboost.py         # Multi-horizon XGBoost training & evaluation
-│   │   ├── forecast_engine.py          # Production multi-horizon trajectory engine
+│   │   ├── train_and_save_forecaster.py# Multi-horizon model training & validation pipeline
+│   │   ├── forecast_engine.py          # Production 100% XGBoost v3 inference engine
 │   │   ├── optimizer.py                # Multi-objective spatial location optimizer
-│   │   └── agent_graph.py              # LangGraph 5-node StateGraph workflow
-│   └── tests/                          # Automated test suite (spatial, ML, agent)
-├── docs/                               # Architecture notes & research papers
-└── frontend/                           # React / Mapbox UI application
+│   │   ├── agent_graph.py              # LangGraph 5-node StateGraph workflow
+│   │   └── models/                     # Serialized model artifacts & evaluation metadata
+│   │       ├── xgboost_forecast_v3.joblib
+│   │       ├── lstm_forecast_v3.pt
+│   │       ├── lstm_scalers.joblib
+│   │       └── model_metadata.json
+│   └── tests/                          # 29 Automated unit, spatial & agent test suites
+│       ├── test_kriging_variation.py
+│       ├── test_forecast_engine.py
+│       ├── test_agent_sequential_flow.py
+│       ├── test_agent_session_memory.py
+│       ├── test_agent_saved_profile.py
+│       ├── test_agent_boundary_check.py
+│       ├── test_agent_closing_ack.py
+│       ├── test_agent_degraded_mode.py
+│       ├── test_agent_genuine_extraction.py
+│       ├── test_agent_location_required.py
+│       ├── test_agent_no_contradiction.py
+│       ├── test_agent_personalization_consistency.py
+│       └── test_agent_tiered_logic.py
+└── frontend/                           # React 19 / TypeScript / Vite / Leaflet UI
+    ├── package.json
+    ├── vite.config.ts
+    ├── index.html
+    └── src/
+        ├── main.tsx
+        ├── App.tsx                     # Main layout, hero, park cards, forecast rail
+        ├── index.css                   # Liquid Glass design tokens & responsive styling
+        ├── components/
+        │   ├── AgentPanel.tsx          # Conversational chat UI & localStorage memory
+        │   └── MapPickerModal.tsx      # Leaflet interactive map picker modal
+        ├── api/                        # Backend REST fetch clients
+        ├── utils/                      # PEVI color bands, risk calculations & helpers
+        └── types/                      # TypeScript definitions
 ```
 
 ---
@@ -78,18 +119,21 @@ HawaGuide/
 ## Quickstart & Execution
 
 ### 1. Database Setup
-Ensure PostgreSQL 18 with PostGIS 3.6 is running, configure `backend/.env`, and execute:
+Ensure PostgreSQL 15+ with PostGIS 3.3+ is installed and running. Create `backend/.env` (see `backend/.env.example`) and initialize the schema:
 ```powershell
 .\venv\Scripts\python.exe backend/data_pipeline/setup_db.py
 ```
 
-### 2. Discover Active Stations & Ingest OpenAQ Readings
+### 2. Discover Stations & Ingest OpenAQ / Weather Data
 ```powershell
-# Discover and register 14 active monitoring stations
+# Discover and register 14 active monitoring stations across Delhi NCR
 .\venv\Scripts\python.exe backend/data_pipeline/openaq_stations.py
 
-# Ingest 90 days of hourly multi-pollutant readings (~144,000 rows)
+# Ingest 90 days of hourly multi-pollutant readings (~144,000 measurements)
 .\venv\Scripts\python.exe backend/data_pipeline/openaq_readings.py
+
+# Ingest concurrent meteorological variables (wind, humidity, rain, temp)
+.\venv\Scripts\python.exe backend/data_pipeline/weather_ingest.py
 ```
 
 ### 3. Run Kriging Validation & 40-Park Interpolation
@@ -102,26 +146,36 @@ Ensure PostgreSQL 18 with PostGIS 3.6 is running, configure `backend/.env`, and 
 .\venv\Scripts\python.exe backend/ml/pevi.py
 ```
 
-### 5. Train & Evaluate 6-Hour Ahead PM2.5 Forecast Models
+### 5. Train & Evaluate Multi-Horizon Forecaster
 ```powershell
-# Train & evaluate multi-horizon XGBoost models
 .\venv\Scripts\python.exe backend/ml/train_and_save_forecaster.py
 ```
 
-### 6. Run Personalized Park Optimizer & Launch FastAPI Backend
-```powershell
-# Run the standalone location optimizer CLI test
-.\venv\Scripts\python.exe backend/ml/optimizer.py
+### 6. Launch Backend & Frontend Services
 
-# Launch the FastAPI REST service on http://localhost:8000
+**Terminal 1: FastAPI REST Backend**
+```powershell
 .\venv\Scripts\uvicorn.exe backend.app.main:app --reload --port 8000
+```
+
+**Terminal 2: React / Vite Frontend**
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+Open `http://localhost:5173` in your browser.
+
+### 7. Run Automated Regression Test Suite (29 Tests)
+```powershell
+.\venv\Scripts\python.exe -m unittest discover -s backend/tests -v
 ```
 
 ---
 
 ## 40 Configured Delhi NCR Green Spaces
 
-Air quality estimates and Personalized Exposure Vulnerability Index scores are computed for 40 real, named urban green spaces and stored in the PostGIS `interpolated_locations` table:
+Air quality estimates and Personalized Exposure Vulnerability Index scores are computed for 40 named urban green spaces and persisted in the PostGIS `interpolated_locations` table:
 
 1. **Lodhi Garden** (Central Delhi)
 2. **Sunder Nursery** (Nizamuddin / South East)
@@ -172,11 +226,11 @@ The intelligent agent layer integrates geostatistical interpolation, ML forecast
 
 ```mermaid
 graph TD
-    A[Start: User Profile & Location] --> B[fetch_current: Query Current PEVI & Pollutant Breakdown]
-    B --> C[fetch_forecast: Generate 6h PM2.5 Trajectory]
-    C --> D[personalize: Apply Inhalation Multipliers & Rank 40 Parks]
-    D --> E[reason: Google Gemini Synthesizes Optimal Window & Green Space]
-    E --> F[explain: Format Plain-Language Advisory Recommendation]
+    A[Start: User Profile & Location] --> B[fetch_current: Query 40-Park Interpolations & Multi-Pollutant Base PEVI]
+    B --> C[fetch_forecast: Generate 6h PM2.5 Trajectory via XGBoost v3]
+    C --> D[personalize: Apply Inhalation Multipliers & Run Spatial Optimizer]
+    D --> E[reason: Groq / Gemini Synthesizes Optimal Window & Green Space]
+    E --> F[explain: Format Plain-Language Advisory & Recommendation]
     F --> G[End: Structured Recommendation & State Trace]
 ```
 
@@ -222,13 +276,15 @@ For any user starting coordinate (lat, lon), the optimizer balances **environmen
    ```text
    Score = alpha * norm_risk + (1 - alpha) * norm_distance    (lower is better)
    ```
-   * `alpha = 1.0` -> Purely lowest pollution risk.
-   * `alpha = 0.0` -> Purely closest geographic proximity.
-   * `alpha = 0.5` -> Balanced health-travel trade-off.
+   * `alpha = 1.0` $\to$ Purely lowest pollution risk.
+   * `alpha = 0.0` $\to$ Purely closest geographic proximity.
+   * `alpha = 0.5` $\to$ Balanced health-travel trade-off.
 
 ---
 
-### 3. FastAPI Endpoint: `POST /agent/recommend`
+### 3. Structured Endpoint: `POST /agent/recommend`
+
+Used for programmatic / non-conversational queries where all parameters are provided up-front.
 
 #### Request Schema:
 ```json
@@ -249,65 +305,58 @@ Returns the final plain-language recommendation text, the optimal time window in
 
 ---
 
-### 4. FastAPI Endpoint: `POST /agent/ask` (Conversational, Session-Aware)
+### 4. Conversational Endpoint: `POST /agent/ask` (Sequential Clarification & Guardrails)
 
-A natural-language conversational interface built on top of the same LangGraph workflow. Accepts free-text messages and maintains per-session slot memory across turns — so users do not need to fill a structured JSON form.
+A natural-language conversational interface that maintains per-session slot memory across turns without forcing users into rigid forms.
 
-#### How it works
+#### 6-Step Sequential Clarification Flow
+
+Rather than overwhelming the user with a combined question for all missing variables, Hawa asks for missing fields **one at a time in a fixed, logical sequence**:
+$$\text{age\_group} \longrightarrow \text{conditions} \longrightarrow \text{smoker} \longrightarrow \text{planned\_activity} \longrightarrow \text{duration\_hours} \longrightarrow \text{location}$$
 
 ```text
-Turn N  →  load partial state for session_id
-        →  Gemini structured-output call: extract {age_group, conditions, smoker,
-                                             planned_activity, duration_hours, location}
-        →  Nominatim geocoding: location name → (lat, lon)
-        →  merge into session state
-        →  still missing fields? → return clarifying question  (status: "clarifying")
-        →  all fields present?  → run full LangGraph agent    (status: "complete")
+Turn 1  → User: "Find me a place for a morning jog"
+          Hawa: "Could you share your age or age group (e.g. 25, child, adult, elderly)?" (status: "clarifying")
+Turn 2  → User: "28"
+          Hawa: "Got it, categorizing you as adult (18-64). Do you have any respiratory or heart conditions (like asthma, COPD, or cardiac issues)?"
+Turn 3  → User: "None"
+          Hawa: "Do you smoke tobacco? (yes / no)"
+Turn 4  → User: "No"
+          Hawa: "How long do you plan to be outside? (e.g. 30 mins, 1 hour, 2 hours)"
+Turn 5  → User: "45 minutes"
+          Hawa: "Where are you located in Delhi NCR?"
+Turn 6  → User: "Connaught Place" (or map pin / GPS click)
+          Hawa: Full personalized park recommendation & optimal time window (status: "complete")
 ```
 
-#### Request Schema:
-```json
-{
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
-  "message": "Is it safe to go outside right now? I'm elderly with asthma.",
-  "alpha": 0.6
-}
-```
+#### Core Conversational Features & Guardrails
 
-#### Response Schema:
-```json
-{
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "clarifying",
-  "message": "To give you a personalised recommendation, I still need a few details: location, whether you smoke (yes / no), planned activity level (rest / moderate / vigorous), and how long you plan to be outside (e.g. 1 hour, 1.5 hours).",
-  "missing_fields": ["location", "whether you smoke (yes / no)", "planned activity level (rest / moderate / vigorous)", "how long you plan to be outside (e.g. 1 hour, 1.5 hours)"],
-  "extraction_degraded": false,
-  "recommendation": null,
-  "disclaimer": "This tool provides general environmental air quality guidance, not medical advice; consult a healthcare provider for personal health decisions."
-}
-```
-
-**`extraction_degraded`**: `true` when the Gemini field-extraction call failed (quota, outage). In that case the question is prefixed honestly: *"I'm having trouble understanding free-text right now, so please share each detail separately: ..."*
-
-Session state is cleared after a successful recommendation, so the next message with the same `session_id` starts a fresh conversation naturally.
+1. **Age-Bracket Transparency**: When age is supplied (e.g., `"28"` or `"72"`), Hawa explicitly acknowledges the mapped category (`"Got it, categorizing you as adult (18-64)"` or `"elderly (65+)"`) before moving to the next question.
+2. **Invalid Response Recovery**: If the user provides an unparseable response to a specific question (e.g., replying `"maybe"` when asked for smoker status), Hawa re-prompts specifically for that field with explicit guidance.
+3. **Casual Closing & Acknowledgment Interception**: Sending polite acknowledgments (`"Thank you"`, `"thanks"`, `"ok"`, `"got it"`, `"bye"`) after a completed recommendation receives a warm closing reply (`"You're welcome! Feel free to ask again whenever you're heading out."`) and does **not** accidentally re-trigger the clarification sequence.
+4. **Delhi NCR Boundary Check (`is_within_delhi_ncr`)**:
+   - Resolved coordinates are verified against the operational boundary: $\text{lat} \in [28.0, 29.2], \text{lon} \in [76.5, 77.9]$.
+   - If outside the area (e.g. Jaipur, Mumbai), Hawa does **not** recommend an absurd 200+ km Delhi park trip. Instead, it responds honestly:
+     *"I'm currently built specifically for Delhi NCR and don't have real air quality data for [detected place name] yet — I'll be able to help when I expand to your city!"*
+5. **Reverse-Geocoded Location Display**: Coordinates captured via GPS or the map picker are reverse-geocoded via Nominatim before display, ensuring user chat bubbles and replies display clean place names (e.g. `"Lodhi Colony, New Delhi"` or `"Jaipur, Rajasthan"`) rather than raw floats like `"28.5931, 77.2197"`.
+6. **Multi-Modal Location Selection**: The UI offers three synchronized location input methods:
+   - **Use my current location**: Direct browser GPS geolocation.
+   - **Pick on map**: Leaflet interactive map modal with OSM tiles and custom glass pin.
+   - **Manual search / text**: Real-time Nominatim geocoding.
+7. **Privacy-First `localStorage` Profile Memory**:
+   - Once a user profile (`age_group`, `conditions`, `smoker`, `planned_activity`) is collected, it is saved in browser `localStorage` (`hawaguide_profile`).
+   - On future visits, Hawa skips repetitive health questions and asks only for transient session variables (`duration_hours` and `location`).
+   - Includes a prominent **"Not you? Reset my info"** button to immediately clear stored profile data without requiring server-side user accounts or passwords.
 
 ---
 
-### 5. API Key & Quota: Same Key, Shared Pool
+### 5. Dual LLM Provider Architecture (Groq + Gemini Fallback)
 
-> [!IMPORTANT]
-> **Both `/agent/recommend` (Gemini reasoning node) and `/agent/ask` (Gemini field-extraction) load the same `GEMINI_API_KEY` from `backend/.env`.**
->
-> - `main.py` resolves `Path(__file__).resolve().parent.parent / ".env"` → `backend/.env`
-> - `agent_graph.py` tries `PROJECT_ROOT / "backend" / ".env"` first → `backend/.env`
->
-> Both paths resolve to the same file. All Gemini calls from a running uvicorn process draw from the **same daily quota**.
+HawaGuide utilizes a provider-neutral orchestration architecture:
 
-> [!CAUTION]
-> **Free-tier quota**: The Gemini free tier allows **20 requests per day per model** (`gemini-3.6-flash`).
-> Each full conversational turn via `/agent/ask` uses **2 quota slots** — 1 for field extraction + 1 for the reasoning node.
-> That means the free tier supports approximately **10 full conversational recommendations per day** under normal use.
-> For sustained production use or load testing, upgrade to a paid Gemini API plan (Pay-as-you-go or Vertex AI) to remove the daily cap.
+* **Primary Engine**: **Groq (`openai/gpt-oss-120b`)** provides high-throughput inference (low latency, high token allowance).
+* **Secondary Fallback**: **Google Gemini (`gemini-3.6-flash` / `gemini-1.5-flash`)** activates automatically if Groq encounters network errors, timeouts, or quota limits.
+* **Graceful Degradation**: If all upstream LLM calls fail, the system sets `extraction_degraded: true` and falls back cleanly to deterministic rule-based clarification questions without crashing.
 
 ---
 
@@ -319,7 +368,7 @@ HawaGuide employs **Ordinary Kriging (OK)** using a spherical variogram model to
 - **Particulate Matter**: PM2.5, PM10
 - **Gaseous Pollutants**: NO2, SO2, O3, CO
 
-#### Cross-Validation Methodology
+#### Cross-Validation Methodology (LOOCV)
 Model performance is evaluated via **Leave-One-Station-Out Cross-Validation (LOOCV)** across **100 randomly sampled hourly timestamps** spanning the 90-day historical archive (~1,400 individual model fits):
 
 | Pollutant | Sample Runs | Avg Stations Reporting | Mean Actual Value | Mean LOOCV RMSE | RMSE Std. Dev (σ) | Mean LOOCV MAE | Relative Error |
@@ -427,7 +476,35 @@ To evaluate whether proximity to localized high-emission monitors skews park vul
 
 ---
 
-### 5. PEVI-Adjusted Relative Vulnerability Bands (Base vs. Personalized Scales)
+### 5. Multi-Horizon Trajectory Forecasting (100% XGBoost v3 vs. LSTM Ablation)
+
+HawaGuide generates 1 to 6-hour ahead $\text{PM}_{2.5}$ delta forecasts ($\Delta \text{PM}_{2.5}(t+h) = \text{PM}_{2.5}(t+h) - \text{Baseline}_{24\text{h}}$) across all monitoring stations. 
+
+#### Evaluated Feature Set (15 Engineered Signals):
+- **Autoregressive Lags**: $\text{lag}_1, \text{lag}_2, \text{lag}_3, \text{lag}_6, \text{lag}_{24}$
+- **Rolling Baselines & Dynamics**: $\text{rolling\_mean}_{6\text{h}}, \text{rolling\_mean}_{24\text{h}}, \text{recent\_trend} = \text{lag}_1 - \text{lag}_3$
+- **Diurnal Encodings**: $\text{hour\_of\_day}, \text{day\_of\_week}$
+- **Meteorology**: $\text{wind\_speed}, \text{wind\_direction}, \text{humidity}, \text{precipitation}, \text{temperature}$
+
+#### Empirical Benchmark & Architecture Decision ($N_{\text{test}} = 3,381$ held-out samples)
+
+| Horizon | Metric | Persistence Baseline | **XGBoost v3 (Selected)** | PyTorch LSTM | 75/25 Ensemble |
+|---|---|---|---|---|---|
+| **$t+1\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 11.59 / 17.85 µg/m³<br>+0.135 / 0.434 | **10.49 / 15.55 µg/m³**<br>**+0.344** / **0.571** | 22.05 / 31.50 µg/m³<br>-1.694 / -0.761 | 11.72 / 16.86 µg/m³<br>+0.228 / 0.495 |
+| **$t+2\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 13.79 / 20.38 µg/m³<br>-0.122 / 0.264 | **12.05 / 17.31 µg/m³**<br>**+0.191** / **0.469** | 21.27 / 30.30 µg/m³<br>-1.480 / -0.628 | 12.84 / 18.30 µg/m³<br>+0.095 / 0.406 |
+| **$t+3\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 15.22 / 22.05 µg/m³<br>-0.312 / 0.138 | **12.99 / 18.20 µg/m³**<br>**+0.106** / **0.413** | 20.72 / 29.33 µg/m³<br>-1.322 / -0.526 | 13.55 / 19.02 µg/m³<br>+0.023 / 0.358 |
+| **$t+4\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 16.35 / 23.24 µg/m³<br>-0.450 / 0.046 | **13.47 / 18.69 µg/m³**<br>**+0.062** / **0.383** | 20.28 / 28.80 µg/m³<br>-1.228 / -0.465 | 14.00 / 19.46 µg/m³<br>-0.017 / 0.331 |
+| **$t+5\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 17.12 / 23.97 µg/m³<br>-0.534 / -0.009 | **13.78 / 19.13 µg/m³**<br>**+0.022** / **0.357** | 20.11 / 28.42 µg/m³<br>-1.157 / -0.419 | 14.19 / 19.71 µg/m³<br>-0.038 / 0.317 |
+| **$t+6\text{h}$** | **MAE** / **RMSE**<br>$R^2_{\text{within}}$ / $R^2_{\text{pooled}}$ | 17.59 / 24.60 µg/m³<br>-0.611 / -0.058 | **13.94 / 19.38 µg/m³**<br>**-0.000** / **0.343** | 20.11 / 28.22 µg/m³<br>-1.120 / -0.393 | 14.35 / 19.89 µg/m³<br>-0.053 / 0.308 |
+
+#### Key Conclusions:
+1. **XGBoost v3 Superiority**: Pure XGBoost v3 achieved the lowest MAE and highest skill across all horizons (peak $R^2_{\text{within}} = \mathbf{+0.344}$ at $t+1\text{h}$, $\mathbf{+0.191}$ at $t+2\text{h}$, $\mathbf{+0.106}$ at $t+3\text{h}$).
+2. **LSTM Exclusion**: The PyTorch sequence model suffered from high variance on delta targets with sparse 14-station lookbacks ($R^2_{\text{within}} < 0$). Adding a 25% LSTM weight diluted XGBoost performance across all 6 horizons.
+3. **Production Deployment**: Production inference in `forecast_engine.py` is configured as **100% XGBoost v3** ($w_{\text{xgb}} = 1.0, w_{\text{lstm}} = 0.0$).
+
+---
+
+### 6. PEVI-Adjusted Relative Vulnerability Bands (Base vs. Personalized Scales)
 
 > [!WARNING]
 > **Scale Differentiation**: **Base PEVI** and **Personalized PEVI** operate on fundamentally different numerical scales and **must NOT use the same risk band cutoffs**:
@@ -454,18 +531,47 @@ Derived from the empirical pooled distribution across representative demographic
 | **Band 3: High Risk** | 7.70 < Pers PEVI <= 10.30 (Q3) | Higher air pollution exposure; sensitive groups may want to reduce strenuous outdoor activity or consider mask protection. |
 | **Band 4: Extreme Risk** | Pers PEVI > 10.30 (Q4) | Significantly elevated exposure; consider indoor activities or choosing a lower-risk nearby location. |
 
-> [!CAUTION]
-> **Health Disclaimer**: This tool provides general environmental air quality guidance, not medical advice; consult a healthcare provider for personal health decisions.
-
 ---
 
-### 6. Seasonal Meteorological Context (Monsoon vs. Winter Smog)
+### 7. Seasonal Meteorological Context (Monsoon vs. Winter Smog)
 
 > [!IMPORTANT]
 > **Pre-Monsoon / Monsoon Dataset Scope**: The underlying 90-day archive spans **June through September**.
 > * During this season, continuous monsoon rainfall, convective atmospheric mixing, and active wet deposition wash out particulate matter, yielding Delhi's annual minimum background concentrations (mean PM2.5 ~ 44.8 µg/m³, mean PM10 ~ 133.2 µg/m³).
 > * The resulting "mostly Moderate" PEVI scores (3.1 - 7.1) accurately reflect this **cleaner monsoon baseline** and must **not** be misinterpreted as underestimating Delhi's chronic winter pollution crisis.
 > * During Delhi's severe winter smog period (**October through January**), characterized by nocturnal thermal inversions, calm winds, and stubble burning plumes, PM2.5 regularly surges 5x - 10x higher (300 - 500+ µg/m³), which will scale PEVI scores well into extreme advisory brackets (10+ to 20+).
+
+---
+
+## Automated Testing, Quality Gates & CI/CD Pipeline
+
+HawaGuide is validated by **29 automated regression and unit tests** across the spatial, machine learning, and conversational stack:
+
+```text
+backend/tests/
+├── test_kriging_variation.py                 # Ordinary Kriging spatial gradient & non-degeneracy validation
+├── test_forecast_engine.py                   # 100% XGBoost v3 inference engine & trajectory schema validation
+├── test_agent_sequential_flow.py             # 6-step sequential clarification turn order & age-bracket confirmation
+├── test_agent_session_memory.py              # In-memory session state preservation & slot merging
+├── test_agent_saved_profile.py               # Pre-seeding from localStorage profile memory
+├── test_agent_boundary_check.py              # Delhi NCR bounding box enforcement (Jaipur/Mumbai honest replies)
+├── test_agent_closing_ack.py                 # Casual closing message interceptor (thank you/ok/bye)
+├── test_agent_degraded_mode.py               # Graceful fallback when LLM extraction fails/quota exhausted
+├── test_agent_genuine_extraction.py          # Live LLM structured output extraction validation
+├── test_agent_location_required.py           # Strict location enforcement before recommendation execution
+├── test_agent_no_contradiction.py            # Consistency between risk bands, text & recommended parks
+├── test_agent_personalization_consistency.py # Monotonic scaling of PEVI multipliers across personas
+└── test_agent_tiered_logic.py                # 4-tier health reasoning alignment in LangGraph
+```
+
+### GitHub Actions CI Matrix (`.github/workflows/ci.yml`)
+Every push and pull request triggers an automated CI pipeline running on `ubuntu-latest`:
+1. Launches a live **PostGIS 15 (`postgis/postgis:15-3.3`)** container service.
+2. Seeds spatial stations, park polygons, and readings using `backend/data_pipeline/seed_ci_data.py`.
+3. Executes the full test suite (`python -m unittest discover -s backend/tests -v`).
+
+### Sentry Error & APM Monitoring
+The backend instruments FastAPI endpoints and LLM invocations using `@sentry/python` (`traces_sample_rate=0.2`) to capture unhandled exceptions, geocoding timeouts, and provider rate limits in production.
 
 ---
 
@@ -506,16 +612,13 @@ Park-level pollutant estimates (stored in `interpolated_locations`) are computed
 
 Averaging across the most recent 24 hours smooths transient single-sensor spikes, gives the variogram estimator a richer and more representative spatial covariance structure, and consistently produces non-degenerate fits with genuine spatial gradients across all six pollutants.
 
-**Tradeoff:** This means the park estimates reflect a ~24-hour lagged picture of air quality rather than the past hour. For the PEVI use case — characterising a park's *typical* pollution exposure for route recommendations — this temporal smoothing is appropriate. For real-time alert thresholds, a separate single-snapshot index (outside PEVI) would be needed.
-
-### 5. Free-Text LLM Extraction & Daily Quota Limits
-* Free-text extraction in `POST /agent/ask` uses live Google Gemini calls with structured schema constraints rather than brittle regex or keyword heuristics.
-* On the Google AI Studio free tier, API usage is bounded by a **20 request/day** per-model quota (`gemini-3.6-flash`).
-* **Graceful Degradation**: If the Gemini API call fails (quota exhausted, network timeout, or upstream outage), the agent marks `extraction_degraded: true` and falls back cleanly to asking structured clarification questions, explicitly informing the user rather than guessing or silently failing.
+### 5. Free-Text LLM Extraction & Provider Fallbacks
+* Free-text extraction in `POST /agent/ask` and reasoning in `POST /agent/recommend` prioritize **Groq (`openai/gpt-oss-120b`)** for high token capacity and rapid turnaround, falling back to **Google Gemini (`gemini-3.6-flash`)**.
+* If both upstream API calls fail (network timeout or upstream outage), the agent marks `extraction_degraded: true` and falls back cleanly to deterministic clarification questions without crashing.
 
 ### 6. Live Nominatim Geocoding & Rate Limits
-* Location resolution uses live OpenStreetMap Nominatim geocoding (`nominatim.openstreetmap.org/search`) with proper `User-Agent` headers rather than hardcoded location lookup dictionaries.
-* Nominatim enforces an operational rate limit of **1 request/second**. Rapid concurrent requests or automated test suites must respect this limit or implement caching to avoid HTTP 429 throttling.
+* Location resolution uses live OpenStreetMap Nominatim geocoding (`nominatim.openstreetmap.org/search` and `/reverse`) with proper `User-Agent` headers rather than hardcoded lookup tables.
+* Nominatim enforces an operational rate limit of **1 request/second**. Rapid concurrent requests or automated test suites respect this limit or use coordinate inputs.
 
 ### 7. Spatial Sensor Density & Kriging Smoothing
 * Delhi NCR ambient pollution surfaces are interpolated from 14 active, high-fidelity OpenAQ/CPCB reference stations.
