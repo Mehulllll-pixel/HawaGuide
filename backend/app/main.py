@@ -684,41 +684,144 @@ def map_age_to_group(val: Any) -> Optional[str]:
     return None
 
 
-# ─── Nominatim Geocoder ──────────────────────────────────────────────────────────────
-def geocode_location(place_name: str) -> Optional[Dict[str, Any]]:
-    """
-    Resolves a free-text place name to (lat, lon) via the Nominatim OSM API.
-    Returns {'lat': float, 'lon': float, 'display_name': str} or None on failure.
+# ─── Delhi NCR Bounding Region ────────────────────────────────────────────────
+# Geographic bounding box defining the operational footprint for HawaGuide (Delhi + NCR satellite cities)
+DELHI_NCR_BOUNDS = {
+    "lat_min": 28.0,
+    "lat_max": 29.2,
+    "lon_min": 76.5,
+    "lon_max": 77.9,
+}
 
-    Policy:
-    - Appends ', Delhi NCR, India' as a soft hint to bias results toward the
-      region, but the caller can rely on the LLM-extracted place name as-is.
-    - Respects Nominatim's usage policy: single request, proper User-Agent,
-      no high-frequency polling.
+
+def is_within_delhi_ncr(lat: float, lon: float) -> bool:
     """
-    url = "https://nominatim.openstreetmap.org/search"
+    Checks whether given coordinates fall within the Delhi NCR bounding area.
+    Latitudes: 28.0 to 29.2, Longitudes: 76.5 to 77.9.
+    """
+    return (
+        DELHI_NCR_BOUNDS["lat_min"] <= lat <= DELHI_NCR_BOUNDS["lat_max"]
+        and DELHI_NCR_BOUNDS["lon_min"] <= lon <= DELHI_NCR_BOUNDS["lon_max"]
+    )
+
+
+# ─── Nominatim Geocoder & Reverse Geocoder ──────────────────────────────────
+def reverse_geocode(lat: float, lon: float) -> str:
+    """
+    Reverse-geocodes lat/lon to a human-readable place name using OpenStreetMap Nominatim.
+    Returns e.g. 'Lodhi Colony, New Delhi' or 'Jaipur, Rajasthan' or formatted coordinates on failure.
+    """
+    url = "https://nominatim.openstreetmap.org/reverse"
     params = {
-        "q": f"{place_name}, Delhi NCR, India",
+        "lat": lat,
+        "lon": lon,
         "format": "json",
-        "limit": 1,
-        "addressdetails": 0,
+        "zoom": 14,
+        "addressdetails": 1,
     }
     headers = {
         "User-Agent": "HawaGuide/1.0 (air-quality advisory app; contact@hawaguide.dev)"
     }
     try:
         resp = _requests.get(url, params=params, headers=headers, timeout=5)
-        resp.raise_for_status()
-        results = resp.json()
-        if results:
-            r = results[0]
-            return {
-                "lat": float(r["lat"]),
-                "lon": float(r["lon"]),
-                "display_name": r.get("display_name", place_name),
-            }
+        if resp.status_code == 200:
+            data = resp.json()
+            addr = data.get("address", {})
+            local_part = (
+                addr.get("suburb")
+                or addr.get("neighbourhood")
+                or addr.get("residential")
+                or addr.get("quarter")
+                or addr.get("city_district")
+                or addr.get("road")
+            )
+            city_part = (
+                addr.get("city")
+                or addr.get("town")
+                or addr.get("village")
+                or addr.get("municipality")
+                or addr.get("county")
+            )
+            state_part = addr.get("state")
+
+            if local_part and city_part and local_part.lower() != city_part.lower():
+                return f"{local_part}, {city_part}"
+            if city_part and state_part and city_part.lower() != state_part.lower():
+                return f"{city_part}, {state_part}"
+            if local_part and state_part:
+                return f"{local_part}, {state_part}"
+            if city_part:
+                return city_part
+            if "display_name" in data:
+                parts = [p.strip() for p in data["display_name"].split(",") if p.strip()]
+                if len(parts) >= 2:
+                    return f"{parts[0]}, {parts[1]}"
+                if parts:
+                    return parts[0]
     except Exception as exc:
-        logging.warning("Nominatim geocoding failed for %r: %s", place_name, exc)
+        logging.warning("Nominatim reverse geocoding failed for (%s, %s): %s", lat, lon, exc)
+    return f"{lat:.4f}, {lon:.4f}"
+
+
+def geocode_location(place_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Resolves a free-text place name to (lat, lon) via the Nominatim OSM API.
+    Returns {'lat': float, 'lon': float, 'display_name': str} or None on failure.
+    Searches general place names with India / Delhi NCR fallback heuristics.
+    """
+    clean_name = place_name.strip()
+    if not clean_name:
+        return None
+
+    url = "https://nominatim.openstreetmap.org/search"
+    headers = {
+        "User-Agent": "HawaGuide/1.0 (air-quality advisory app; contact@hawaguide.dev)"
+    }
+
+    # Determine query priority
+    lower = clean_name.lower()
+    is_ncr_keyword = any(k in lower for k in ["delhi", "noida", "gurugram", "gurgaon", "faridabad", "ghaziabad"])
+    
+    if is_ncr_keyword:
+        queries = [clean_name, f"{clean_name}, Delhi NCR, India"]
+    else:
+        queries = [clean_name, f"{clean_name}, India", f"{clean_name}, Delhi NCR, India"]
+
+    for q in queries:
+        params = {
+            "q": q,
+            "format": "json",
+            "limit": 1,
+            "addressdetails": 1,
+        }
+        try:
+            resp = _requests.get(url, params=params, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                results = resp.json()
+                if results:
+                    r = results[0]
+                    addr = r.get("address", {})
+                    local = addr.get("suburb") or addr.get("neighbourhood") or addr.get("residential") or addr.get("city_district")
+                    city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("state_district")
+                    state = addr.get("state")
+                    if local and city and local.lower() != city.lower():
+                        display = f"{local}, {city}"
+                    elif city and state and city.lower() != state.lower():
+                        display = f"{city}, {state}"
+                    elif local and state:
+                        display = f"{local}, {state}"
+                    elif city:
+                        display = city
+                    else:
+                        display = r.get("display_name", clean_name).split(",")[0].strip()
+
+                    return {
+                        "lat": float(r["lat"]),
+                        "lon": float(r["lon"]),
+                        "display_name": display,
+                    }
+        except Exception as exc:
+            logging.warning("Nominatim geocoding failed for %r (%s): %s", place_name, q, exc)
     return None
 
 
@@ -1141,13 +1244,28 @@ def _parse_direct_fields(text: str) -> Dict[str, Any]:
             if dur_min_match:
                 extracted["duration_hours"] = round(float(dur_min_match.group(1)) / 60.0, 3)
 
-    # 6. Direct Location Check against known parks
-    park = _find_park_by_name(clean)
-    if park:
-        extracted["lat"] = park["lat"]
-        extracted["lon"] = park["lon"]
-        extracted["_location_name"] = park["name"]
-        extracted["_location_display"] = park["name"]
+    # 6. Direct Location Check against coordinates or known parks
+    coord_match = re.search(r"(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)", clean)
+    if coord_match:
+        try:
+            clat = float(coord_match.group(1))
+            clon = float(coord_match.group(2))
+            extracted["lat"] = clat
+            extracted["lon"] = clon
+            name_part = re.sub(r"\s*\(?-?\d{1,2}\.\d+\s*,\s*-?\d{1,3}\.\d+\)?\s*", "", clean).strip()
+            if not name_part or re.match(r"^-?\d{1,2}\.\d+,\s*-?\d{1,3}\.\d+$", name_part):
+                name_part = reverse_geocode(clat, clon)
+            extracted["_location_name"] = name_part
+            extracted["_location_display"] = name_part
+        except ValueError:
+            pass
+    else:
+        park = _find_park_by_name(clean)
+        if park:
+            extracted["lat"] = park["lat"]
+            extracted["lon"] = park["lon"]
+            extracted["_location_name"] = park["name"]
+            extracted["_location_display"] = park["name"]
 
     return extracted
 
@@ -1289,6 +1407,10 @@ class AgentAskRequest(BaseModel):
         0.5, ge=0.0, le=1.0,
         description="Optional risk-vs-distance weight; preserved across the session."
     )
+    profile: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional saved profile dictionary with age_group, conditions, smoker, planned_activity."
+    )
 
 
 class AgentAskResponse(BaseModel):
@@ -1317,7 +1439,53 @@ class AgentAskResponse(BaseModel):
         None,
         description="Full recommendation payload (same shape as /agent/recommend), or null if still clarifying."
     )
+    collected_profile: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="User profile fields collected in session (age_group, conditions, smoker, planned_activity)."
+    )
     disclaimer: str
+
+
+def _is_closing_or_acknowledgment(text: str) -> bool:
+    """
+    Detects polite closings, thank-yous, and casual acknowledgments that should NOT trigger
+    or restart the sequential clarification flow.
+    Matches phrases like 'thank you', 'thanks', 'ok', 'okay', 'got it', 'bye',
+    'goodbye', 'cool', 'great', 'appreciate it', etc. (case-insensitive with punctuation).
+    """
+    import re
+    clean = re.sub(r"[^\w\s]", " ", text.lower()).strip()
+    clean = re.sub(r"\s+", " ", clean)
+
+    tokens = clean.split()
+    if not tokens or len(tokens) > 8:
+        return False
+
+    closing_patterns = [
+        r"^(?:thank\s*you(?:\s+(?:very\s+much|so\s+much|a\s+lot|hawa))?|thanks(?:\s+(?:a\s+lot|so\s+much|hawa))?|thx|ty)$",
+        r"^(?:ok|okay|k|kk|alright|all\s+right|got\s+it|understood|noted|sure|yep)$",
+        r"^(?:bye|goodbye|bye\s+bye|cya|see\s+ya|see\s+you|take\s+care|have\s+a\s+(?:good|great|nice)\s+day)$",
+        r"^(?:cool|great|awesome|perfect|sounds\s+good|wonderful|nice|superb|excellent)$",
+        r"^(?:appreciate\s+it|much\s+appreciated|many\s+thanks)$",
+        r"^(?:ok|okay|cool|great|awesome|perfect|got\s+it|sounds\s+good)\s*,?\s*(?:thanks|thank\s*you|appreciate\s+it|bye|take\s+care)$",
+        r"^(?:thanks|thank\s*you)\s*,?\s*(?:bye|goodbye|take\s+care|have\s+a\s+(?:good|great|nice)\s+day)$",
+    ]
+    if any(re.match(pattern, clean) for pattern in closing_patterns):
+        return True
+
+    # Check if short message (<= 5 tokens) is entirely made of closing vocabulary
+    allowed_closing_tokens = {
+        "thank", "you", "thanks", "thx", "ty", "ok", "okay", "k", "alright", "got", "it",
+        "bye", "goodbye", "cool", "great", "awesome", "perfect", "sounds", "good", "nice",
+        "appreciate", "much", "appreciated", "take", "care", "hawa", "so", "very", "a", "lot",
+        "day", "have"
+    }
+    if len(tokens) <= 5 and all(t in allowed_closing_tokens for t in tokens):
+        primary_keywords = {"thank", "thanks", "thx", "ty", "ok", "okay", "bye", "goodbye", "cool", "great", "awesome", "perfect", "appreciate", "appreciated"}
+        if any(t in primary_keywords for t in tokens):
+            return True
+
+    return False
 
 
 @app.post("/agent/ask", response_model=AgentAskResponse, tags=["Agent"])
@@ -1325,21 +1493,54 @@ def conversational_ask(req: AgentAskRequest):
     """
     Conversational Agent Endpoint with Sequential Clarification Flow:
     -----------------------------------------------------------------
-    1. Retrieves (or creates) partial state for the given session_id.
-    2. Extracts newly-provided fields from user free-text / direct answers.
-    3. Merges newly-extracted fields into stored partial state.
-    4. Evaluates whether previous sequential question received an unparseable invalid answer (re-asks if so).
-    5. If required fields are still missing, asks ONE field at a time in fixed order:
+    1. Detects casual closing / acknowledgment messages and responds politely without restarting clarification.
+    2. Retrieves (or creates) partial state for the given session_id.
+    3. Extracts newly-provided fields from user free-text / direct answers.
+    4. Merges newly-extracted fields into stored partial state.
+    5. Evaluates whether previous sequential question received an unparseable invalid answer (re-asks if so).
+    6. If required fields are still missing, asks ONE field at a time in fixed order:
        age_group -> conditions -> smoker -> planned_activity -> duration_hours -> location.
-    6. Confirms mapped age bracket before asking the next question.
-    7. Once all required fields are present, runs full LangGraph agent workflow.
+    7. Confirms mapped age bracket before asking the next question.
+    8. Once all required fields are present, runs full LangGraph agent workflow.
     """
     session_id = req.session_id
     user_text = req.message
     disclaimer = "This tool provides general environmental air quality guidance, not medical advice; consult a healthcare provider for personal health decisions."
 
+    # Immediate check for casual acknowledgments / closings BEFORE any extraction or clarification
+    if _is_closing_or_acknowledgment(user_text):
+        session_state = _SESSIONS.get(session_id, {})
+        prof = {}
+        source_prof = req.profile if req.profile and isinstance(req.profile, dict) else session_state
+        if source_prof.get("age_group") in ("adult", "child", "elderly"):
+            prof["age_group"] = source_prof["age_group"]
+        if "conditions" in source_prof and isinstance(source_prof.get("conditions"), list):
+            prof["conditions"] = source_prof["conditions"]
+        if "smoker" in source_prof and isinstance(source_prof.get("smoker"), bool):
+            prof["smoker"] = source_prof["smoker"]
+        if source_prof.get("planned_activity") in ("rest", "moderate", "vigorous"):
+            prof["planned_activity"] = source_prof["planned_activity"]
+
+        return AgentAskResponse(
+            session_id=session_id,
+            status="complete",
+            message="You're welcome! Feel free to ask again whenever you're heading out.",
+            missing_fields=[],
+            extraction_degraded=False,
+            recommendation=None,
+            collected_profile=prof if prof else None,
+            disclaimer=disclaimer
+        )
+
     # Step 1: Load (or initialise) session partial state
     session_state = _SESSIONS.get(session_id, {})
+    
+    # Pre-seed session state from optional client-provided saved profile
+    if req.profile and isinstance(req.profile, dict):
+        for k in ("age_group", "conditions", "smoker", "planned_activity"):
+            if k in req.profile and req.profile[k] is not None and k not in session_state:
+                session_state[k] = req.profile[k]
+
     last_asked_field = session_state.get("_last_asked_field")
 
     # Step 2: Extract fields from the new message
@@ -1357,22 +1558,37 @@ def conversational_ask(req: AgentAskRequest):
         except ValueError:
             pass
 
-    # Contextual location fallback: geocode place name if location was explicitly asked
+    # Contextual location fallback: coordinates / park / geocode place name if location was explicitly asked
     if last_asked_field == "location" and "lat" not in newly_extracted and "lon" not in newly_extracted:
-        # Check local park matcher first
-        matched_park = _find_park_by_name(user_text.strip())
-        if matched_park:
-            newly_extracted["lat"] = matched_park["lat"]
-            newly_extracted["lon"] = matched_park["lon"]
-            newly_extracted["_location_name"] = matched_park["name"]
-            newly_extracted["_location_display"] = matched_park["name"]
+        coord_match = re.search(r"(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)", user_text)
+        if coord_match:
+            try:
+                clat = float(coord_match.group(1))
+                clon = float(coord_match.group(2))
+                newly_extracted["lat"] = clat
+                newly_extracted["lon"] = clon
+                name_part = re.sub(r"\s*\(?-?\d{1,2}\.\d+\s*,\s*-?\d{1,3}\.\d+\)?\s*", "", user_text).strip()
+                if not name_part or re.match(r"^-?\d{1,2}\.\d+,\s*-?\d{1,3}\.\d+$", name_part):
+                    name_part = reverse_geocode(clat, clon)
+                newly_extracted["_location_name"] = name_part
+                newly_extracted["_location_display"] = name_part
+            except ValueError:
+                pass
         else:
-            geo = geocode_location(user_text.strip())
-            if geo:
-                newly_extracted["lat"] = geo["lat"]
-                newly_extracted["lon"] = geo["lon"]
-                newly_extracted["_location_name"] = geo["display_name"].split(",")[0].strip()
-                newly_extracted["_location_display"] = geo["display_name"]
+            # Check local park matcher first
+            matched_park = _find_park_by_name(user_text.strip())
+            if matched_park:
+                newly_extracted["lat"] = matched_park["lat"]
+                newly_extracted["lon"] = matched_park["lon"]
+                newly_extracted["_location_name"] = matched_park["name"]
+                newly_extracted["_location_display"] = matched_park["name"]
+            else:
+                geo = geocode_location(user_text.strip())
+                if geo:
+                    newly_extracted["lat"] = geo["lat"]
+                    newly_extracted["lon"] = geo["lon"]
+                    newly_extracted["_location_name"] = geo["display_name"]
+                    newly_extracted["_location_display"] = geo["display_name"]
 
     # Track if age was newly provided in this turn
     age_newly_set = ("age_group" in newly_extracted and "age_group" not in session_state)
@@ -1384,6 +1600,19 @@ def conversational_ask(req: AgentAskRequest):
     # Preserve alpha if provided in this request
     if req.alpha != 0.5 or "alpha" not in session_state:
         session_state["alpha"] = req.alpha
+
+    # Helper to build current collected profile dictionary
+    def _get_collected_profile() -> Optional[Dict[str, Any]]:
+        prof = {}
+        if session_state.get("age_group") in ("adult", "child", "elderly"):
+            prof["age_group"] = session_state["age_group"]
+        if "conditions" in session_state and isinstance(session_state.get("conditions"), list):
+            prof["conditions"] = session_state["conditions"]
+        if "smoker" in session_state and isinstance(session_state.get("smoker"), bool):
+            prof["smoker"] = session_state["smoker"]
+        if session_state.get("planned_activity") in ("rest", "moderate", "vigorous"):
+            prof["planned_activity"] = session_state["planned_activity"]
+        return prof if prof else None
 
     # Step 4: Check if previous sequential question received an unparseable / invalid answer
     is_invalid_answer = False
@@ -1420,15 +1649,47 @@ def conversational_ask(req: AgentAskRequest):
             missing_fields=missing,
             extraction_degraded=extraction_degraded,
             recommendation=None,
+            collected_profile=_get_collected_profile(),
             disclaimer=disclaimer
         )
 
-    # Step 6: All fields present — persist and run the full agent workflow
+    # Step 6: All fields present — check Delhi NCR boundary before running optimization
+    user_lat = float(session_state["lat"])
+    user_lon = float(session_state["lon"])
+    collected_final_profile = _get_collected_profile()
+
+    if not is_within_delhi_ncr(user_lat, user_lon):
+        # Resolve clean detected place name
+        detected_place = session_state.get("_location_name")
+        if not detected_place or re.match(r"^-?\d{1,2}\.\d+,\s*-?\d{1,3}\.\d+$", str(detected_place).strip()):
+            detected_place = reverse_geocode(user_lat, user_lon)
+        if not detected_place or re.match(r"^-?\d{1,2}\.\d+,\s*-?\d{1,3}\.\d+$", str(detected_place).strip()):
+            detected_place = f"{user_lat:.4f}, {user_lon:.4f}"
+
+        out_of_bounds_msg = (
+            f"I'm currently built specifically for Delhi NCR and don't have real air quality data for {detected_place} yet — "
+            f"I'll be able to help when I expand to your city!"
+        )
+
+        # Clear session after completing response
+        _SESSIONS.pop(session_id, None)
+
+        return AgentAskResponse(
+            session_id=session_id,
+            status="complete",
+            message=out_of_bounds_msg,
+            missing_fields=[],
+            extraction_degraded=False,
+            recommendation=None,
+            collected_profile=collected_final_profile,
+            disclaimer=disclaimer
+        )
+
     _SESSIONS[session_id] = session_state
     try:
         result = run_agent_recommendation(
-            lat=float(session_state["lat"]),
-            lon=float(session_state["lon"]),
+            lat=user_lat,
+            lon=user_lon,
             age_group=session_state.get("age_group", "adult"),
             conditions=session_state.get("conditions", []),
             smoker=bool(session_state.get("smoker", False)),
@@ -1445,6 +1706,7 @@ def conversational_ask(req: AgentAskRequest):
             message=result["recommendation"],
             missing_fields=[],
             recommendation=result,
+            collected_profile=collected_final_profile,
             disclaimer=disclaimer
         )
     except Exception as e:

@@ -374,81 +374,81 @@ export default function App() {
         <div className="park-grid">
           {loading
             ? // Loading skeleton — same card shape
-              Array.from({ length: 6 }).map((_, i) => (
-                <article
-                  key={i}
-                  className="park-card"
-                  style={{ '--park-color': '#8ea7b4' } as React.CSSProperties}
-                >
-                  <div className="park-card-top">
-                    <div>
-                      <h3 style={{ opacity: 0.3 }}>Loading…</h3>
-                      <p style={{ opacity: 0.2 }}>—</p>
-                    </div>
-                    <span className="park-pin">+</span>
+            Array.from({ length: 6 }).map((_, i) => (
+              <article
+                key={i}
+                className="park-card"
+                style={{ '--park-color': '#8ea7b4' } as React.CSSProperties}
+              >
+                <div className="park-card-top">
+                  <div>
+                    <h3 style={{ opacity: 0.3 }}>Loading…</h3>
+                    <p style={{ opacity: 0.2 }}>—</p>
                   </div>
-                  <div className="park-score-row" style={{ marginTop: 37 }}>
-                    <span className="park-score" style={{ opacity: 0.2 }}>—</span>
-                  </div>
-                </article>
-              ))
+                  <span className="park-pin">+</span>
+                </div>
+                <div className="park-score-row" style={{ marginTop: 37 }}>
+                  <span className="park-score" style={{ opacity: 0.2 }}>—</span>
+                </div>
+              </article>
+            ))
             : displayedParks.map((park) => (
-                <article
-                  key={park.name}
-                  className="park-card"
-                  style={{ '--park-color': park.color } as React.CSSProperties}
-                >
-                  <div className="park-card-top">
-                    <div>
-                      <h3>{park.name}</h3>
-                      <p>{park.area}</p>
-                    </div>
-                    <span className="park-pin">+</span>
+              <article
+                key={park.name}
+                className="park-card"
+                style={{ '--park-color': park.color } as React.CSSProperties}
+              >
+                <div className="park-card-top">
+                  <div>
+                    <h3>{park.name}</h3>
+                    <p>{park.area}</p>
                   </div>
-                  <div className="park-score-row">
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <span className="park-score">{park.score.toFixed(2)}</span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-                      <span className="park-risk">{park.risk}</span>
-                      {personalized && (
-                        <span style={{
-                          fontSize: 9,
-                          fontWeight: 700,
-                          color: '#42cfc0',
-                          letterSpacing: '.05em',
-                          textTransform: 'uppercase',
-                          opacity: .9,
-                        }}>✦ Personalized</span>
-                      )}
-                    </div>
+                  <span className="park-pin">+</span>
+                </div>
+                <div className="park-score-row">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span className="park-score">{park.score.toFixed(2)}</span>
                   </div>
-                  {/* Advisory guidance — plain-language context */}
-                  <p style={{
-                    margin: '8px 0 0',
-                    fontSize: 10.5,
-                    lineHeight: 1.5,
-                    color: '#7190a1',
-                    minHeight: '2lh',
-                  }}>
-                    {park.advisory}
-                  </p>
-                  <div className="park-meter">
-                    <span style={{ width: `${Math.min(100, Math.max(0, ((park.score - 3.12) / (Math.max(7.07, park.score * 1.05) - 3.12)) * 100))}%` }} />
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+                    <span className="park-risk">{park.risk}</span>
+                    {personalized && (
+                      <span style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: '#42cfc0',
+                        letterSpacing: '.05em',
+                        textTransform: 'uppercase',
+                        opacity: .9,
+                      }}>✦ Personalized</span>
+                    )}
                   </div>
-                  <div className="park-readings">
-                    <span>
-                      <small>PM2.5</small>
-                      {park.pm25.toFixed(1)} <b>µg/m³</b>
-                    </span>
-                    <span>
-                      <small>PM10</small>
-                      {park.pm10.toFixed(1)} <b>µg/m³</b>
-                    </span>
-                    <span className="readings-time">Live</span>
-                  </div>
-                </article>
-              ))}
+                </div>
+                {/* Advisory guidance — plain-language context */}
+                <p style={{
+                  margin: '8px 0 0',
+                  fontSize: 10.5,
+                  lineHeight: 1.5,
+                  color: '#7190a1',
+                  minHeight: '2lh',
+                }}>
+                  {park.advisory}
+                </p>
+                <div className="park-meter">
+                  <span style={{ width: `${Math.min(100, Math.max(0, ((park.score - 3.12) / (Math.max(7.07, park.score * 1.05) - 3.12)) * 100))}%` }} />
+                </div>
+                <div className="park-readings">
+                  <span>
+                    <small>PM2.5</small>
+                    {park.pm25.toFixed(1)} <b>µg/m³</b>
+                  </span>
+                  <span>
+                    <small>PM10</small>
+                    {park.pm10.toFixed(1)} <b>µg/m³</b>
+                  </span>
+                  <span className="readings-time">Live</span>
+                </div>
+              </article>
+            ))}
         </div>
 
         {!isSearching && filteredParks.length > 8 && (

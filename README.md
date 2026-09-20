@@ -471,6 +471,9 @@ Derived from the empirical pooled distribution across representative demographic
 
 ## Known Limitations & Engineering Tradeoffs
 
+> [!NOTE]
+> For an honest, categorized breakdown of deliberately deferred improvements and architectural choices (spatial covariates, external drift kriging, boundary layer data, dynamic tool orchestration, production session stores), see [docs/FUTURE_IMPROVEMENTS.md](docs/FUTURE_IMPROVEMENTS.md).
+
 > [!IMPORTANT]
 > The spatial smoothing behavior of Ordinary Kriging is an **intentional, mathematically intrinsic tradeoff** of Gaussian random field regression, rather than an unexplained algorithmic flaw.
 
